@@ -3,6 +3,9 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "bin": {
+    "conductor": "./index.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
