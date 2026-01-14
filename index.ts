@@ -1,5 +1,8 @@
 #!/usr/bin/env bun
 
+// Import the Dockerfile as text - Bun's bundler embeds this in the binary
+import SANDBOX_DOCKERFILE from "./sandbox/Dockerfile" with { type: "text" };
+
 // ============================================================================
 // Conductor CLI - Automates branch + database fork + agent sandbox creation
 // ============================================================================
@@ -313,6 +316,46 @@ async function setupEnvFile(
 }
 
 // ============================================================================
+// Docker Image Management
+// ============================================================================
+
+const DOCKER_IMAGE_NAME = "conductor-sandbox";
+
+async function dockerImageExists(): Promise<boolean> {
+  try {
+    await Bun.$`docker image inspect ${DOCKER_IMAGE_NAME}`.quiet();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function buildDockerImage(): Promise<void> {
+  // Use Bun.spawn to pipe the Dockerfile content to docker build
+  const proc = Bun.spawn(["docker", "build", "-t", DOCKER_IMAGE_NAME, "-"], {
+    stdin: Buffer.from(SANDBOX_DOCKERFILE),
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+
+  const exitCode = await proc.exited;
+
+  if (exitCode !== 0) {
+    throw new Error(`Docker build failed with exit code ${exitCode}`);
+  }
+}
+
+async function ensureDockerImage(): Promise<void> {
+  if (await dockerImageExists()) {
+    return;
+  }
+
+  console.log("Building conductor-sandbox Docker image (this may take a while)...");
+  await buildDockerImage();
+  console.log("  Docker image built successfully");
+}
+
+// ============================================================================
 // Docker Container
 // ============================================================================
 
@@ -339,7 +382,7 @@ async function startContainer(
       --env-file ${conductorEnvPath} \
       -v ${worktreePath}:/app \
       -w /app \
-      conductor-sandbox \
+      ${DOCKER_IMAGE_NAME} \
       claude ${prompt}`.quiet();
     return result.stdout.toString().trim();
   } catch (err) {
@@ -407,7 +450,10 @@ async function main(): Promise<void> {
   await setupEnvFile(branchName, forkResult.envVars);
   console.log("  Updated .env with database connection");
 
-  // Step 6: Start container
+  // Step 6: Ensure Docker image exists
+  await ensureDockerImage();
+
+  // Step 7: Start container
   console.log("Starting agent container...");
   const containerId = await startContainer(branchName, prompt);
   console.log(`  Container started: ${containerId.substring(0, 12)}`);
