@@ -8,6 +8,7 @@ interface ParsedArgs {
   command: string | null;
   prompt: string | null;
   serviceId: string | null;
+  noDbFork: boolean;
 }
 
 interface ForkResult {
@@ -46,7 +47,7 @@ function formatShellError(error: ShellError): Error {
 // ============================================================================
 
 function printUsage(): void {
-  console.log(`Usage: conductor branch "<prompt>" [--service-id <id>]
+  console.log(`Usage: conductor branch "<prompt>" [--service-id <id>] [--no-db-fork]
 
 Creates a new feature branch with an isolated database fork and starts
 a sandboxed Claude Code agent to work on the task.
@@ -56,10 +57,12 @@ Arguments:
 
 Options:
   --service-id <id>     Database service ID to fork (defaults to tiger's default)
+  --no-db-fork          Skip the database fork step
 
 Examples:
   conductor branch "Add user authentication with OAuth"
   conductor branch "Fix the bug in payment processing" --service-id svc-12345
+  conductor branch "Update documentation" --no-db-fork
 `);
 }
 
@@ -68,6 +71,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     command: null,
     prompt: null,
     serviceId: null,
+    noDbFork: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -79,6 +83,8 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (serviceId) {
         result.serviceId = serviceId;
       }
+    } else if (arg === "--no-db-fork") {
+      result.noDbFork = true;
     } else if (arg.startsWith("--")) {
       // Unknown flag, skip
     } else if (!result.command) {
@@ -347,7 +353,7 @@ async function startContainer(
   branchName: string,
   prompt: string,
   repoInfo: RepoInfo,
-  envVars: Record<string, string>
+  envVars?: Record<string, string>
 ): Promise<string> {
   const conductorEnvPath = ".conductor/.env";
   const conductorEnvFile = Bun.file(conductorEnvPath);
@@ -361,7 +367,7 @@ async function startContainer(
 
   // Build env var arguments for docker run
   const envArgs: string[] = [];
-  for (const [key, value] of Object.entries(envVars)) {
+  for (const [key, value] of Object.entries(envVars ?? {})) {
     envArgs.push("-e", `${key}=${value}`);
   }
 
@@ -402,13 +408,13 @@ Use the \\\`gh\\\` command to create a PR when done."
 function printSummary(
   branchName: string,
   repoInfo: RepoInfo,
-  forkResult: ForkResult,
+  forkResult: ForkResult | null,
   containerId: string
 ): void {
   console.log(`
 Repository: ${repoInfo.fullName}
-Branch: conductor/${branchName}
-Database: ${forkResult.name} (service ID: ${forkResult.service_id})
+Branch: conductor/${branchName}${forkResult ? `
+Database: ${forkResult.name} (service ID: ${forkResult.service_id})` : ""}
 Container: conductor-${branchName}
 
 To view agent logs:
@@ -446,14 +452,19 @@ async function main(): Promise<void> {
   // Step 3: Ensure .gitignore has .conductor/ entry
   await ensureGitignore();
 
-  // Step 4: Fork database
-  console.log("Forking database (this may take a few minutes)...");
-  const forkResult = await forkDatabase(branchName, args.serviceId);
-  console.log(`  Database fork created: ${forkResult.name}`);
+  // Step 4: Fork database (unless --no-db-fork is set)
+  let forkResult: ForkResult | null = null;
+  if (args.noDbFork) {
+    console.log("Skipping database fork (--no-db-fork)");
+  } else {
+    console.log("Forking database (this may take a few minutes)...");
+    forkResult = await forkDatabase(branchName, args.serviceId);
+    console.log(`  Database fork created: ${forkResult.name}`);
+  }
 
   // Step 5: Start container (repo will be cloned inside container)
   console.log("Starting agent container...");
-  const containerId = await startContainer(branchName, prompt, repoInfo, forkResult.envVars);
+  const containerId = await startContainer(branchName, prompt, repoInfo, forkResult?.envVars);
   console.log(`  Container started: ${containerId.substring(0, 12)}`);
 
   // Summary
