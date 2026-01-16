@@ -314,11 +314,11 @@ RUN curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | gpg --d
 # Helm
 RUN curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-# Docker CLI (for Docker-in-Docker scenarios)
+# Docker (daemon + CLI for Docker-in-Docker scenarios)
 RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
   && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list \
   && apt-get update \
-  && apt-get install -y docker-ce-cli docker-compose-plugin \
+  && apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin \
   && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
@@ -338,10 +338,6 @@ RUN curl -fsSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | tee /etc/apt/tru
   && apt-get update \
   && apt-get install -y ngrok \
   && rm -rf /var/lib/apt/lists/*
-
-# Helper script to git push via https
-COPY gp.sh /usr/local/bin/gp
-RUN chmod +x /usr/local/bin/gp
 
 # ============================================================================
 # NON-ROOT USER SETUP
@@ -370,6 +366,10 @@ USER ${USER_NAME}
 RUN curl -fsSL https://claude.ai/install.sh | bash
 COPY .claude.json /home/${USER_NAME}/.claude.json
 
+# tiger CLI
+RUN curl -fsSL https://cli.tigerdata.com | sh
+
+
 # ============================================================================
 # ENVIRONMENT CONFIGURATION
 # ============================================================================
@@ -390,7 +390,7 @@ RUN  git config --global user.email "conductor@tigerdata.com" \
 
 
 # Create working directory
-WORKDIR /app
+WORKDIR /work
 
 # Default command
 CMD ["/bin/bash"]

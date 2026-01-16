@@ -118,21 +118,6 @@ async function getExistingBranches(): Promise<string[]> {
   }
 }
 
-async function getExistingWorktrees(): Promise<string[]> {
-  const worktreesDir = ".conductor/worktrees";
-  try {
-    const result = await Bun.$`ls ${worktreesDir}`.quiet();
-    return result.stdout
-      .toString()
-      .split("\n")
-      .map((name) => name.trim())
-      .filter(Boolean);
-  } catch {
-    // Directory doesn't exist yet, return empty array
-    return [];
-  }
-}
-
 async function getExistingServices(): Promise<string[]> {
   try {
     const result = await Bun.$`tiger svc list -o json`.quiet();
@@ -165,17 +150,15 @@ async function generateBranchName(
   maxRetries: number = 3
 ): Promise<string> {
   // Gather all existing names to avoid conflicts
-  const [existingBranches, existingWorktrees, existingServices, existingContainers] =
+  const [existingBranches, existingServices, existingContainers] =
     await Promise.all([
       getExistingBranches(),
-      getExistingWorktrees(),
       getExistingServices(),
       getExistingContainers(),
     ]);
 
   const allExistingNames = new Set([
     ...existingBranches,
-    ...existingWorktrees,
     ...existingServices,
     ...existingContainers,
   ]);
@@ -235,24 +218,42 @@ ${[...allExistingNames].join(", ")}`;
 }
 
 // ============================================================================
-// Git Worktree
+// Git Repository Info
 // ============================================================================
 
-async function createWorktree(branchName: string): Promise<void> {
-  const worktreePath = `.conductor/worktrees/${branchName}`;
+interface RepoInfo {
+  owner: string;
+  repo: string;
+  fullName: string; // owner/repo
+}
 
-  // Check if path already exists
-  const pathExists = await Bun.file(worktreePath).exists();
-  if (pathExists) {
-    throw new Error(`Worktree path already exists: ${worktreePath}`);
-  }
-
-  // Create the worktree with a new branch from main
+async function getRepoInfo(): Promise<RepoInfo> {
+  let remoteUrl: string;
   try {
-    await Bun.$`git worktree add ${worktreePath} -b ${branchName} main`.quiet();
+    const result = await Bun.$`git remote get-url origin`.quiet();
+    remoteUrl = result.stdout.toString().trim();
   } catch (err) {
     throw formatShellError(err as ShellError);
   }
+
+  // Parse GitHub URL (supports both HTTPS and SSH formats)
+  // https://github.com/owner/repo.git
+  // git@github.com:owner/repo.git
+  let repoPath = remoteUrl;
+  repoPath = repoPath.replace(/^https:\/\/github\.com\//, "");
+  repoPath = repoPath.replace(/^git@github\.com:/, "");
+  repoPath = repoPath.replace(/\.git$/, "");
+
+  const parts = repoPath.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error(`Unable to parse GitHub repository from remote URL: ${remoteUrl}`);
+  }
+
+  return {
+    owner: parts[0],
+    repo: parts[1],
+    fullName: repoPath,
+  };
 }
 
 // ============================================================================
@@ -339,54 +340,14 @@ async function forkDatabase(
 }
 
 // ============================================================================
-// Environment Setup
-// ============================================================================
-
-async function setupEnvFile(
-  branchName: string,
-  envVars: Record<string, string>
-): Promise<void> {
-  const sourceEnvPath = ".env";
-  const targetEnvPath = `.conductor/worktrees/${branchName}/.env`;
-
-  const sourceFile = Bun.file(sourceEnvPath);
-  if (!(await sourceFile.exists())) {
-    throw new Error("No .env file found in project root");
-  }
-
-  const content = await sourceFile.text();
-  const lines = content.split("\n");
-  const keysToSet = new Set(Object.keys(envVars));
-  const keysFound = new Set<string>();
-
-  // Replace existing keys
-  const newLines = lines.map((line) => {
-    for (const key of keysToSet) {
-      if (line.startsWith(`${key}=`)) {
-        keysFound.add(key);
-        return `${key}=${envVars[key]}`;
-      }
-    }
-    return line;
-  });
-
-  // Append any keys not found
-  for (const key of keysToSet) {
-    if (!keysFound.has(key)) {
-      newLines.push(`${key}=${envVars[key]}`);
-    }
-  }
-
-  await Bun.write(targetEnvPath, newLines.join("\n"));
-}
-
-// ============================================================================
 // Docker Container
 // ============================================================================
 
 async function startContainer(
   branchName: string,
-  prompt: string
+  prompt: string,
+  repoInfo: RepoInfo,
+  envVars: Record<string, string>
 ): Promise<string> {
   const conductorEnvPath = ".conductor/.env";
   const conductorEnvFile = Bun.file(conductorEnvPath);
@@ -396,20 +357,38 @@ async function startContainer(
     await Bun.write(conductorEnvPath, "");
   }
 
-  const absolutePath = process.cwd();
-  const worktreePath = `${absolutePath}/.conductor/worktrees/${branchName}`;
   const containerName = `conductor-${branchName}`;
+
+  // Build env var arguments for docker run
+  const envArgs: string[] = [];
+  for (const [key, value] of Object.entries(envVars)) {
+    envArgs.push("-e", `${key}=${value}`);
+  }
+
+  // Build the startup script that:
+  // 1. Clones the repo using gh
+  // 2. Creates and checks out the new branch
+  // 3. Runs claude with the prompt
+  const startupScript = `
+set -e
+cd /work
+gh auth setup-git
+gh repo clone ${repoInfo.fullName} app
+cd app
+git switch -c "conductor/${branchName}"
+exec claude -p --dangerously-skip-permissions \\
+  "${prompt.replace(/"/g, '\\"')}
+
+Use the \\\`gh\\\` command to create a PR when done."
+`.trim();
 
   try {
     const result = await Bun.$`docker run -d \
       --name ${containerName} \
       --env-file ${conductorEnvPath} \
-      -v ${worktreePath}:/app \
-      -w /app \
+      ${envArgs} \
       conductor-sandbox \
-      claude -p --dangerously-skip-permissions \
-        --append-system-prompt "Use the \`gp\` command to push your commits to the current branch (no arguments needed). Use the \`gh\` command to create a PR." \
-        "${prompt}"`;
+      bash -c ${startupScript}`;
     return result.stdout.toString().trim();
   } catch (err) {
     throw formatShellError(err as ShellError);
@@ -422,12 +401,13 @@ async function startContainer(
 
 function printSummary(
   branchName: string,
+  repoInfo: RepoInfo,
   forkResult: ForkResult,
   containerId: string
 ): void {
   console.log(`
-Branch: ${branchName}
-Worktree: .conductor/worktrees/${branchName}
+Repository: ${repoInfo.fullName}
+Branch: conductor/${branchName}
 Database: ${forkResult.name} (service ID: ${forkResult.service_id})
 Container: conductor-${branchName}
 
@@ -453,17 +433,17 @@ async function main(): Promise<void> {
 
   const prompt = args.prompt;
 
-  // Step 1: Generate branch name
+  // Step 1: Get repo info
+  console.log("Getting repository info...");
+  const repoInfo = await getRepoInfo();
+  console.log(`  Repository: ${repoInfo.fullName}`);
+
+  // Step 2: Generate branch name
   console.log("Generating branch name...");
   const branchName = await generateBranchName(prompt);
   console.log(`  Branch name: ${branchName}`);
 
-  // Step 2: Create worktree
-  console.log(`Creating worktree...`);
-  await createWorktree(branchName);
-  console.log(`  Created .conductor/worktrees/${branchName}`);
-
-  // Step 3: Ensure .gitignore
+  // Step 3: Ensure .gitignore has .conductor/ entry
   await ensureGitignore();
 
   // Step 4: Fork database
@@ -471,18 +451,13 @@ async function main(): Promise<void> {
   const forkResult = await forkDatabase(branchName, args.serviceId);
   console.log(`  Database fork created: ${forkResult.name}`);
 
-  // Step 5: Setup .env
-  console.log("Configuring environment...");
-  await setupEnvFile(branchName, forkResult.envVars);
-  console.log("  Updated .env with database connection");
-
-  // Step 6: Start container
+  // Step 5: Start container (repo will be cloned inside container)
   console.log("Starting agent container...");
-  const containerId = await startContainer(branchName, prompt);
+  const containerId = await startContainer(branchName, prompt, repoInfo, forkResult.envVars);
   console.log(`  Container started: ${containerId.substring(0, 12)}`);
 
   // Summary
-  printSummary(branchName, forkResult, containerId);
+  printSummary(branchName, repoInfo, forkResult, containerId);
 }
 
 main().catch((err) => {
