@@ -36,6 +36,20 @@ export async function startContainer(
   const containerName = `conductor-${branchName}`;
 
   // Build env var arguments for docker run
+  // Order matters for precedence: later values override earlier ones
+  // Precedence (lowest to highest): hostEnvArgs -> --env-file -> envArgs
+
+  // Pass through API keys from host environment (lowest precedence)
+  const hostEnvArgs: string[] = [];
+  const apiKeysToPassthrough = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'];
+  for (const key of apiKeysToPassthrough) {
+    const value = process.env[key];
+    if (value) {
+      hostEnvArgs.push('-e', `${key}=${value}`);
+    }
+  }
+
+  // Explicit env vars passed to startContainer (highest precedence)
   const envArgs: string[] = [];
   for (const [key, value] of Object.entries(envVars ?? {})) {
     envArgs.push('-e', `${key}=${value}`);
@@ -87,6 +101,7 @@ Use the \\\`gh\\\` command to create a PR when done."
     if (detach) {
       const result = await Bun.$`docker run -d \
         --name ${containerName} \
+        ${hostEnvArgs} \
         --env-file ${conductorEnvPath} \
         ${envArgs} \
         ${volumeArgs} \
@@ -104,6 +119,7 @@ Use the \\\`gh\\\` command to create a PR when done."
         '--rm',
         '--name',
         containerName,
+        ...hostEnvArgs,
         '--env-file',
         conductorEnvPath,
         ...envArgs,
