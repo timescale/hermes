@@ -5,10 +5,13 @@
 import { formatShellError, type ShellError } from '../utils';
 import type { RepoInfo } from './git';
 
+export type AgentType = 'claude' | 'opencode';
+
 export async function startContainer(
   branchName: string,
   prompt: string,
   repoInfo: RepoInfo,
+  agent: AgentType,
   envVars?: Record<string, string>,
 ): Promise<string> {
   const conductorEnvPath = '.conductor/.env';
@@ -27,10 +30,16 @@ export async function startContainer(
     envArgs.push('-e', `${key}=${value}`);
   }
 
+  // Build the agent command based on the selected agent type
+  const agentCommand =
+    agent === 'claude'
+      ? `claude -p --dangerously-skip-permissions`
+      : `opencode run`;
+
   // Build the startup script that:
   // 1. Clones the repo using gh
   // 2. Creates and checks out the new branch
-  // 3. Runs claude with the prompt
+  // 3. Runs the selected agent with the prompt
   const startupScript = `
 set -e
 cd /work
@@ -38,7 +47,7 @@ gh auth setup-git
 gh repo clone ${repoInfo.fullName} app
 cd app
 git switch -c "conductor/${branchName}"
-exec claude -p --dangerously-skip-permissions \\
+exec ${agentCommand} \\
   "${prompt.replace(/"/g, '\\"')}
 
 Use the \\\`gh\\\` command to create a PR when done."

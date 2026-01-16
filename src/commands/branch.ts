@@ -4,7 +4,7 @@
 
 import { Command } from 'commander';
 import { type ForkResult, forkDatabase } from '../services/db';
-import { startContainer } from '../services/docker';
+import { type AgentType, startContainer } from '../services/docker';
 import {
   generateBranchName,
   getRepoInfo,
@@ -15,6 +15,7 @@ import { ensureGitignore } from '../utils';
 interface BranchOptions {
   serviceId?: string;
   dbFork: boolean;
+  agent: AgentType;
 }
 
 function printSummary(
@@ -69,11 +70,12 @@ async function branchAction(
   }
 
   // Step 5: Start container (repo will be cloned inside container)
-  console.log('Starting agent container...');
+  console.log(`Starting agent container (using ${options.agent})...`);
   const containerId = await startContainer(
     branchName,
     prompt,
     repoInfo,
+    options.agent,
     forkResult?.envVars,
   );
   console.log(`  Container started: ${containerId.substring(0, 12)}`);
@@ -92,4 +94,9 @@ export const branchCommand = new Command('branch')
     "Database service ID to fork (defaults to tiger's default)",
   )
   .option('--no-db-fork', 'Skip the database fork step')
+  .option(
+    '-a, --agent <type>',
+    'Agent to use: claude or opencode',
+    'opencode',
+  )
   .action(branchAction);
