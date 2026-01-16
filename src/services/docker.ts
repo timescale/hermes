@@ -63,13 +63,36 @@ Use the \\\`gh\\\` command to create a PR when done."
 `.trim();
 
   try {
-    const result = await Bun.$`docker run ${detach ? '-d' : ['-it', '--rm']} \
+    if (detach) {
+      const result = await Bun.$`docker run -d \
         --name ${containerName} \
         --env-file ${conductorEnvPath} \
         ${envArgs} \
         conductor-sandbox \
         bash -c ${startupScript}`;
-    return detach ? result.stdout.toString().trim() : null;
+      return result.stdout.toString().trim();
+    }
+
+    // Interactive/foreground mode - use Bun.spawn with inherited stdio for proper TTY
+    const proc = Bun.spawn([
+      'docker',
+      'run',
+      '-it',
+      '--rm',
+      '--name',
+      containerName,
+      '--env-file',
+      conductorEnvPath,
+      ...envArgs,
+      'conductor-sandbox',
+      'bash',
+      '-c',
+      startupScript,
+    ], {
+      stdio: ['inherit', 'inherit', 'inherit'],
+    });
+    await proc.exited;
+    return null;
   } catch (err) {
     throw formatShellError(err as ShellError);
   }
