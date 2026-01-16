@@ -7,13 +7,20 @@ import type { RepoInfo } from './git';
 
 export type AgentType = 'claude' | 'opencode';
 
+export interface StartContainerOptions {
+  branchName: string;
+  prompt: string;
+  repoInfo: RepoInfo;
+  agent: AgentType;
+  detach: boolean;
+  envVars?: Record<string, string>;
+}
+
 export async function startContainer(
-  branchName: string,
-  prompt: string,
-  repoInfo: RepoInfo,
-  agent: AgentType,
-  envVars?: Record<string, string>,
-): Promise<string> {
+  options: StartContainerOptions,
+): Promise<string | null> {
+  const { branchName, prompt, repoInfo, agent, detach, envVars } = options;
+
   const conductorEnvPath = '.conductor/.env';
   const conductorEnvFile = Bun.file(conductorEnvPath);
 
@@ -54,13 +61,13 @@ Use the \\\`gh\\\` command to create a PR when done."
 `.trim();
 
   try {
-    const result = await Bun.$`docker run -d \
-      --name ${containerName} \
-      --env-file ${conductorEnvPath} \
-      ${envArgs} \
-      conductor-sandbox \
-      bash -c ${startupScript}`;
-    return result.stdout.toString().trim();
+    const result = await Bun.$`docker run ${detach ? '-d' : ['-it', '--rm']} \
+        --name ${containerName} \
+        --env-file ${conductorEnvPath} \
+        ${envArgs} \
+        conductor-sandbox \
+        bash -c ${startupScript}`;
+    return detach ? result.stdout.toString().trim() : null;
   } catch (err) {
     throw formatShellError(err as ShellError);
   }

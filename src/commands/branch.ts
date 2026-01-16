@@ -16,13 +16,13 @@ interface BranchOptions {
   serviceId?: string;
   dbFork: boolean;
   agent: AgentType;
+  detach: boolean;
 }
 
 function printSummary(
   branchName: string,
   repoInfo: RepoInfo,
   forkResult: ForkResult | null,
-  _containerId: string,
 ): void {
   console.log(`
 Repository: ${repoInfo.fullName}
@@ -71,17 +71,20 @@ async function branchAction(
 
   // Step 5: Start container (repo will be cloned inside container)
   console.log(`Starting agent container (using ${options.agent})...`);
-  const containerId = await startContainer(
+  const containerId = await startContainer({
     branchName,
     prompt,
     repoInfo,
-    options.agent,
-    forkResult?.envVars,
-  );
-  console.log(`  Container started: ${containerId.substring(0, 12)}`);
+    agent: options.agent,
+    detach: options.detach,
+    envVars: forkResult?.envVars,
+  });
 
-  // Summary
-  printSummary(branchName, repoInfo, forkResult, containerId);
+  if (options.detach) {
+    console.log(`  Container started: ${containerId?.substring(0, 12)}`);
+    // Summary only shown in detached mode
+    printSummary(branchName, repoInfo, forkResult);
+  }
 }
 
 export const branchCommand = new Command('branch')
@@ -94,9 +97,6 @@ export const branchCommand = new Command('branch')
     "Database service ID to fork (defaults to tiger's default)",
   )
   .option('--no-db-fork', 'Skip the database fork step')
-  .option(
-    '-a, --agent <type>',
-    'Agent to use: claude or opencode',
-    'opencode',
-  )
+  .option('-a, --agent <type>', 'Agent to use: claude or opencode', 'opencode')
+  .option('-d, --detach', 'Run container in background (detached mode)')
   .action(branchAction);
