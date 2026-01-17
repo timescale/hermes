@@ -2,6 +2,7 @@
   "name": "conductor",
   "module": "index.ts",
   "scripts": {
+    "build": "bun build ./index.ts --compile --outfile ./bin/conductor",
     "typecheck": "tsc --noEmit",
     "lint": "bun x @biomejs/biome check"
   },
