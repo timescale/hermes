@@ -9,7 +9,13 @@ import SANDBOX_DOCKERFILE from '../../sandbox/Dockerfile' with { type: 'text' };
 import { formatShellError, type ShellError } from '../utils';
 import type { RepoInfo } from './git';
 
+// Compute MD5 hash of the Dockerfile content for versioned tagging
+const hasher = new Bun.CryptoHasher('md5');
+hasher.update(SANDBOX_DOCKERFILE);
+const dockerfileHash = hasher.digest('hex').slice(0, 12);
+
 const DOCKER_IMAGE_NAME = 'conductor-sandbox';
+const DOCKER_IMAGE_TAG = `${DOCKER_IMAGE_NAME}:md5-${dockerfileHash}`;
 
 // ============================================================================
 // Docker Image Management
@@ -17,7 +23,7 @@ const DOCKER_IMAGE_NAME = 'conductor-sandbox';
 
 async function dockerImageExists(): Promise<boolean> {
   try {
-    await Bun.$`docker image inspect ${DOCKER_IMAGE_NAME}`.quiet();
+    await Bun.$`docker image inspect ${DOCKER_IMAGE_TAG}`.quiet();
     return true;
   } catch {
     return false;
@@ -26,7 +32,7 @@ async function dockerImageExists(): Promise<boolean> {
 
 async function buildDockerImage(): Promise<void> {
   // Use Bun.spawn to pipe the Dockerfile content to docker build
-  const proc = Bun.spawn(['docker', 'build', '-t', DOCKER_IMAGE_NAME, '-'], {
+  const proc = Bun.spawn(['docker', 'build', '-t', DOCKER_IMAGE_TAG, '-'], {
     stdin: Buffer.from(SANDBOX_DOCKERFILE),
     stdout: 'inherit',
     stderr: 'inherit',
@@ -45,7 +51,7 @@ export async function ensureDockerImage(): Promise<void> {
   }
 
   console.log(
-    'Building conductor-sandbox Docker image (this may take a while)...',
+    `Building Docker image ${DOCKER_IMAGE_TAG} (this may take a while)...`,
   );
   await buildDockerImage();
   console.log('  Docker image built successfully');
@@ -153,7 +159,7 @@ Use the \\\`gh\\\` command to create a PR when done."
         --env-file ${conductorEnvPath} \
         ${envArgs} \
         ${volumeArgs} \
-        conductor-sandbox \
+        ${DOCKER_IMAGE_TAG} \
         bash -c ${startupScript}`;
       return result.stdout.toString().trim();
     }
@@ -172,7 +178,7 @@ Use the \\\`gh\\\` command to create a PR when done."
         conductorEnvPath,
         ...envArgs,
         ...volumeArgs,
-        'conductor-sandbox',
+        DOCKER_IMAGE_TAG,
         'bash',
         '-c',
         startupScript,
