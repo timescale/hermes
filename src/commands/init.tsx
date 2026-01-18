@@ -10,7 +10,9 @@ import { AGENTS, getModelsForAgent } from '../services/agents';
 import {
   type AgentType,
   type ConductorConfig,
-  readConfig,
+  mergeConfig,
+  readHomeConfig,
+  readLocalConfig,
   writeConfig,
 } from '../services/config';
 import { listServices, type TigerService } from '../services/tiger';
@@ -268,24 +270,48 @@ async function selectModel(
 // ============================================================================
 
 async function initAction(): Promise<void> {
-  // Check for existing config
-  const existingConfig = (await readConfig()) ?? {};
+  // Check for existing config (local and home)
+  const [localConfig, homeConfig] = await Promise.all([
+    readLocalConfig(),
+    readHomeConfig(),
+  ]);
 
-  if (Object.keys(existingConfig).length > 0) {
+  // Show current configuration with source indicators
+  const hasLocalConfig = localConfig && Object.keys(localConfig).length > 0;
+  const hasHomeConfig = homeConfig && Object.keys(homeConfig).length > 0;
+
+  if (hasLocalConfig || hasHomeConfig) {
     console.log('Current configuration:');
-    if (existingConfig.tigerServiceId !== undefined) {
-      console.log(
-        `  Service: ${existingConfig.tigerServiceId === null ? '(None)' : existingConfig.tigerServiceId}`,
-      );
-    }
-    if (existingConfig.agent) {
-      console.log(`  Agent: ${existingConfig.agent}`);
-    }
-    if (existingConfig.model) {
-      console.log(`  Model: ${existingConfig.model}`);
+
+    // Display each config key with its source
+    const configKeys: Array<{
+      key: keyof ConductorConfig;
+      label: string;
+      format?: (v: unknown) => string;
+    }> = [
+      {
+        key: 'tigerServiceId',
+        label: 'Service',
+        format: (v) => (v === null ? '(None)' : String(v)),
+      },
+      { key: 'agent', label: 'Agent' },
+      { key: 'model', label: 'Model' },
+    ];
+
+    for (const { key, label, format = String } of configKeys) {
+      const localVal = localConfig?.[key];
+      const homeVal = homeConfig?.[key];
+      if (localVal !== undefined) {
+        console.log(`  ${label}: ${format(localVal)} (local)`);
+      } else if (homeVal !== undefined) {
+        console.log(`  ${label}: ${format(homeVal)} (global)`);
+      }
     }
     console.log('');
   }
+
+  // Merge configs for initial values (local takes precedence)
+  const existingConfig = mergeConfig(localConfig, homeConfig);
 
   // Fetch available services
   console.log('Fetching Tiger services...');
