@@ -48,7 +48,7 @@ To stop the agent:
 `);
 }
 
-async function branchAction(
+export async function branchAction(
   prompt: string,
   options: BranchOptions,
 ): Promise<void> {
@@ -115,17 +115,29 @@ async function branchAction(
   }
 }
 
-export const branchCommand = new Command('branch')
-  .description(
-    'Create a feature branch with isolated DB fork and start agent sandbox',
-  )
-  .argument('<prompt>', 'Natural language description of the task')
-  .option(
-    '-s, --service-id <id>',
-    'Database service ID to fork (defaults to .conductor config or tiger default)',
-  )
-  .option('--no-db-fork', 'Skip the database fork step')
-  .option('-a, --agent <type>', 'Agent to use: claude or opencode', 'opencode')
-  .option('-d, --detach', 'Run container in background (detached mode)')
-  .option('-i, --interactive', 'Run agent in full TUI mode')
-  .action(branchAction);
+/**
+ * Add the standard branch command options to a Command instance
+ */
+export function withBranchOptions<T extends Command>(cmd: T): T {
+  return cmd
+    .option(
+      '-s, --service-id <id>',
+      'Database service ID to fork (defaults to .conductor config or tiger default)',
+    )
+    .option('--no-db-fork', 'Skip the database fork step')
+    .option(
+      '-a, --agent <type>',
+      'Agent to use: claude or opencode',
+      'opencode',
+    )
+    .option('-d, --detach', 'Run container in background (detached mode)')
+    .option('-i, --interactive', 'Run agent in full TUI mode') as T;
+}
+
+export const branchCommand = withBranchOptions(
+  new Command('branch')
+    .description(
+      'Create a feature branch with isolated DB fork and start agent sandbox',
+    )
+    .argument('<prompt>', 'Natural language description of the task'),
+).action(branchAction);
