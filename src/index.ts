@@ -4,6 +4,7 @@
 
 import { program } from 'commander';
 import { branchCommand } from './commands/branch';
+import { initCommand } from './commands/init';
 
 program
   .name('conductor')
@@ -11,5 +12,6 @@ program
   .version('1.0.0');
 
 program.addCommand(branchCommand);
+program.addCommand(initCommand);
 
 program.parse();

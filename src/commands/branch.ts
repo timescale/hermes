@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { Command } from 'commander';
+import { getConfiguredServiceId } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
 import {
   type AgentType,
@@ -70,20 +71,29 @@ async function branchAction(
   // Step 3: Ensure .gitignore has .conductor/ entry
   await ensureGitignore();
 
-  // Step 4: Fork database (unless --no-db-fork is set)
+  // Step 4: Determine service ID from options or config
+  const effectiveServiceId: string | null | undefined =
+    options.serviceId || (await getConfiguredServiceId());
+
+  // Step 5: Fork database (unless --no-db-fork is set or config says null)
   let forkResult: ForkResult | null = null;
   if (!options.dbFork) {
     console.log('Skipping database fork (--no-db-fork)');
+  } else if (effectiveServiceId === null) {
+    console.log('Skipping database fork (configured as "none" in config)');
   } else {
     console.log('Forking database (this may take a few minutes)...');
-    forkResult = await forkDatabase(branchName, options.serviceId);
+    forkResult = await forkDatabase(
+      branchName,
+      effectiveServiceId || undefined,
+    );
     console.log(`  Database fork created: ${forkResult.name}`);
   }
 
-  // Step 5: Ensure Docker image exists (build if missing)
+  // Step 6: Ensure Docker image exists (build if missing)
   await ensureDockerImage();
 
-  // Step 6: Start container (repo will be cloned inside container)
+  // Step 7: Start container (repo will be cloned inside container)
   console.log(`Starting agent container (using ${options.agent})...`);
   const containerId = await startContainer({
     branchName,
@@ -112,7 +122,7 @@ export const branchCommand = new Command('branch')
   .argument('<prompt>', 'Natural language description of the task')
   .option(
     '-s, --service-id <id>',
-    "Database service ID to fork (defaults to tiger's default)",
+    'Database service ID to fork (defaults to .conductor config or tiger default)',
   )
   .option('--no-db-fork', 'Skip the database fork step')
   .option('-a, --agent <type>', 'Agent to use: claude or opencode', 'opencode')
