@@ -6,51 +6,71 @@ import { createCliRenderer, type SelectOption } from '@opentui/core';
 import { createRoot, useKeyboard } from '@opentui/react';
 import { Command } from 'commander';
 import { useState } from 'react';
-import { readConfig, writeConfig } from '../services/config';
+import { AGENTS, getModelsForAgent } from '../services/agents';
+import {
+  type AgentType,
+  type ConductorConfig,
+  readConfig,
+  writeConfig,
+} from '../services/config';
 import { listServices, type TigerService } from '../services/tiger';
 
-interface ServiceSelectorProps {
-  services: TigerService[];
-  currentServiceId?: string | null;
-  onSelect: (serviceId: string | null) => void;
-  onCancel: () => void;
+// ============================================================================
+// Types
+// ============================================================================
+
+type Step = 'service' | 'agent' | 'model';
+
+interface SelectionResult<T> {
+  type: 'selected';
+  value: T;
 }
 
-function ServiceSelector({
-  services,
-  currentServiceId,
+interface CancelledResult {
+  type: 'cancelled';
+}
+
+interface BackResult {
+  type: 'back';
+}
+
+type StepResult<T> = SelectionResult<T> | CancelledResult | BackResult;
+
+// ============================================================================
+// Generic Selector Component
+// ============================================================================
+
+interface SelectorProps {
+  title: string;
+  description: string;
+  options: SelectOption[];
+  initialIndex: number;
+  showBack?: boolean;
+  onSelect: (value: string | null) => void;
+  onCancel: () => void;
+  onBack?: () => void;
+}
+
+function Selector({
+  title,
+  description,
+  options,
+  initialIndex,
+  showBack = false,
   onSelect,
   onCancel,
-}: ServiceSelectorProps) {
-  // Build options list with "None" at the top
-  const options: SelectOption[] = [
-    {
-      name: '(None)',
-      description: "This project doesn't need database forks",
-      value: '__null__',
-    },
-    ...services.map((svc) => ({
-      name: svc.name,
-      description: `${svc.service_id} - ${svc.metadata.environment}, ${svc.region_code}, ${svc.status}${svc.paused ? ' (PAUSED)' : ''}`,
-      value: svc.service_id,
-    })),
-  ];
-
-  // Find initial index based on current config
-  const initialIndex =
-    currentServiceId === null
-      ? 0 // "None" selected
-      : currentServiceId
-        ? options.findIndex((opt) => opt.value === currentServiceId)
-        : 0;
-
+  onBack,
+}: SelectorProps) {
   const [_selectedIndex, setSelectedIndex] = useState(
     initialIndex >= 0 ? initialIndex : 0,
   );
 
   useKeyboard((key) => {
-    if (key.name === 'q' || key.name === 'escape') {
+    if (key.name === 'escape') {
       onCancel();
+    }
+    if (showBack && onBack && (key.name === 'backspace' || key.name === 'b')) {
+      onBack();
     }
   });
 
@@ -67,7 +87,7 @@ function ServiceSelector({
   return (
     <box style={{ flexDirection: 'column', padding: 1, flexGrow: 1 }}>
       <box
-        title="Configure Conductor"
+        title={title}
         style={{
           border: true,
           borderStyle: 'single',
@@ -76,12 +96,11 @@ function ServiceSelector({
           flexGrow: 1,
         }}
       >
-        <text>
-          Select a Tiger service to use as the default parent for database
-          forks.
-        </text>
+        <text>{description}</text>
         <text style={{ fg: '#888888' }}>
-          Use arrow keys to navigate, Enter to select, Esc to cancel.
+          {showBack
+            ? 'Arrow keys to navigate, Enter to select, b/Backspace to go back, Esc to cancel'
+            : 'Arrow keys to navigate, Enter to select, Esc to cancel'}
         </text>
 
         <select
@@ -103,15 +122,169 @@ function ServiceSelector({
   );
 }
 
+// ============================================================================
+// Step Runner Helper
+// ============================================================================
+
+async function runStep<T>(
+  renderApp: (
+    onSelect: (value: T) => void,
+    onCancel: () => void,
+    onBack: () => void,
+  ) => React.ReactNode,
+): Promise<StepResult<T>> {
+  let resolveStep: (result: StepResult<T>) => void;
+  const stepPromise = new Promise<StepResult<T>>((resolve) => {
+    resolveStep = resolve;
+  });
+
+  const renderer = await createCliRenderer({ exitOnCtrlC: true });
+
+  const App = () =>
+    renderApp(
+      (value) => resolveStep({ type: 'selected', value }),
+      () => resolveStep({ type: 'cancelled' }),
+      () => resolveStep({ type: 'back' }),
+    );
+
+  const root = createRoot(renderer);
+  root.render(<App />);
+
+  const result = await stepPromise;
+  renderer.destroy();
+
+  return result;
+}
+
+// ============================================================================
+// Individual Steps
+// ============================================================================
+
+async function selectService(
+  services: TigerService[],
+  currentValue?: string | null,
+): Promise<StepResult<string | null>> {
+  const options: SelectOption[] = [
+    {
+      name: '(None)',
+      description: "This project doesn't need database forks",
+      value: '__null__',
+    },
+    ...services.map((svc) => ({
+      name: svc.name,
+      description: `${svc.service_id} - ${svc.metadata.environment}, ${svc.region_code}, ${svc.status}${svc.paused ? ' (PAUSED)' : ''}`,
+      value: svc.service_id,
+    })),
+  ];
+
+  const initialIndex =
+    currentValue === null
+      ? 0
+      : currentValue
+        ? options.findIndex((opt) => opt.value === currentValue)
+        : 0;
+
+  return runStep((onSelect, onCancel) => (
+    <Selector
+      title="Step 1/3: Database Service"
+      description="Select a Tiger service to use as the default parent for database forks."
+      options={options}
+      initialIndex={initialIndex}
+      showBack={false}
+      onSelect={onSelect}
+      onCancel={onCancel}
+    />
+  ));
+}
+
+async function selectAgent(
+  currentValue?: AgentType,
+): Promise<StepResult<AgentType>> {
+  const options: SelectOption[] = AGENTS.map((agent) => ({
+    name: agent.name,
+    description: agent.description,
+    value: agent.id,
+  }));
+
+  const initialIndex = currentValue
+    ? options.findIndex((opt) => opt.value === currentValue)
+    : 0;
+
+  return runStep((onSelect, onCancel, onBack) => (
+    <Selector
+      title="Step 2/3: Default Agent"
+      description="Select the default coding agent to use."
+      options={options}
+      initialIndex={initialIndex >= 0 ? initialIndex : 0}
+      showBack
+      onSelect={(v) => onSelect(v as AgentType)}
+      onCancel={onCancel}
+      onBack={onBack}
+    />
+  ));
+}
+
+async function selectModel(
+  agent: AgentType,
+  currentValue?: string,
+): Promise<StepResult<string | null>> {
+  const models = await getModelsForAgent(agent);
+
+  if (models.length === 0) {
+    // No models available, skip this step
+    return { type: 'selected', value: '' };
+  }
+
+  const options: SelectOption[] = models.map((model) => ({
+    name: model.name,
+    description: model.description,
+    value: model.id,
+  }));
+
+  const initialIndex = currentValue
+    ? options.findIndex((opt) => opt.value === currentValue)
+    : options.findIndex((opt) =>
+        agent === 'claude'
+          ? opt.value === 'opus'
+          : opt.value === 'anthropic/claude-opus-4-5',
+      );
+
+  return runStep((onSelect, onCancel, onBack) => (
+    <Selector
+      title={`Step 3/3: Default Model (${agent})`}
+      description={`Select the default model for ${agent}.`}
+      options={options}
+      initialIndex={initialIndex >= 0 ? initialIndex : 0}
+      showBack
+      onSelect={onSelect}
+      onCancel={onCancel}
+      onBack={onBack}
+    />
+  ));
+}
+
+// ============================================================================
+// Main Init Action
+// ============================================================================
+
 async function initAction(): Promise<void> {
   // Check for existing config
-  const existingConfig = await readConfig();
-  const currentServiceId = existingConfig?.tigerServiceId;
+  const existingConfig = (await readConfig()) ?? {};
 
-  if (currentServiceId !== undefined) {
-    console.log(
-      `Current configuration: ${currentServiceId === null ? '(None)' : currentServiceId}`,
-    );
+  if (Object.keys(existingConfig).length > 0) {
+    console.log('Current configuration:');
+    if (existingConfig.tigerServiceId !== undefined) {
+      console.log(
+        `  Service: ${existingConfig.tigerServiceId === null ? '(None)' : existingConfig.tigerServiceId}`,
+      );
+    }
+    if (existingConfig.agent) {
+      console.log(`  Agent: ${existingConfig.agent}`);
+    }
+    if (existingConfig.model) {
+      console.log(`  Model: ${existingConfig.model}`);
+    }
+    console.log('');
   }
 
   // Fetch available services
@@ -125,78 +298,88 @@ async function initAction(): Promise<void> {
   }
 
   if (services.length === 0) {
-    console.log('\nNo Tiger services found.');
+    console.log('No Tiger services found.');
     console.log(
       'Create a service at https://console.cloud.timescale.com or use the tiger CLI.',
     );
-    console.log('\nYou can still configure conductor to skip database forks:');
+    console.log('You can still configure conductor to skip database forks.\n');
   }
 
-  // Create a promise that resolves when user makes a selection
-  let resolveSelection: (value: string | null | 'cancelled') => void;
-  const selectionPromise = new Promise<string | null | 'cancelled'>(
-    (resolve) => {
-      resolveSelection = resolve;
-    },
-  );
+  // Track selections as we go through steps
+  const config: ConductorConfig = { ...existingConfig };
+  let currentStep: Step = 'service';
 
-  // Render the TUI
-  const renderer = await createCliRenderer({
-    exitOnCtrlC: true,
-  });
+  // Step through the wizard
+  while (true) {
+    if (currentStep === 'service') {
+      const result = await selectService(services, config.tigerServiceId);
 
-  function App() {
-    return (
-      <ServiceSelector
-        services={services}
-        currentServiceId={currentServiceId}
-        onSelect={(serviceId) => {
-          resolveSelection(serviceId);
-        }}
-        onCancel={() => {
-          resolveSelection('cancelled');
-        }}
-      />
-    );
-  }
+      if (result.type === 'cancelled') {
+        console.log('\nCancelled. No changes made.');
+        return;
+      }
+      if (result.type === 'selected') {
+        config.tigerServiceId = result.value;
+        currentStep = 'agent';
+      }
+    } else if (currentStep === 'agent') {
+      const result = await selectAgent(config.agent);
 
-  const root = createRoot(renderer);
-  root.render(<App />);
+      if (result.type === 'cancelled') {
+        console.log('\nCancelled. No changes made.');
+        return;
+      }
+      if (result.type === 'back') {
+        currentStep = 'service';
+        continue;
+      }
+      if (result.type === 'selected') {
+        // If agent changed, clear the model selection
+        if (config.agent !== result.value) {
+          config.model = undefined;
+        }
+        config.agent = result.value;
+        currentStep = 'model';
+      }
+    } else if (currentStep === 'model' && config.agent) {
+      const result = await selectModel(config.agent, config.model);
 
-  // Wait for selection
-  const result = await selectionPromise;
-
-  // Clean up the TUI
-  renderer.destroy();
-
-  if (result === 'cancelled') {
-    console.log('\nCancelled. No changes made.');
-    return;
+      if (result.type === 'cancelled') {
+        console.log('\nCancelled. No changes made.');
+        return;
+      }
+      if (result.type === 'back') {
+        currentStep = 'agent';
+        continue;
+      }
+      if (result.type === 'selected') {
+        config.model = result.value || undefined;
+        break; // Done with wizard
+      }
+    }
   }
 
   // Write the config
-  await writeConfig({
-    ...existingConfig,
-    tigerServiceId: result,
-  });
+  await writeConfig(config);
 
   // Print confirmation
-  if (result === null) {
-    console.log('\nConfigured conductor to skip database forks by default.');
-    console.log(
-      'You can still create forks with: conductor branch --service-id <id>',
-    );
-  } else {
-    const selectedService = services.find((s) => s.service_id === result);
-    console.log(
-      `\nConfigured conductor to use "${selectedService?.name ?? result}" as the default parent service.`,
-    );
-  }
   console.log('\nConfiguration saved to .conductor/config.yml');
+  console.log('');
+  console.log('Summary:');
+
+  if (config.tigerServiceId === null) {
+    console.log('  Database: (None) - forks will be skipped by default');
+  } else if (config.tigerServiceId) {
+    const svc = services.find((s) => s.service_id === config.tigerServiceId);
+    console.log(`  Database: ${svc?.name ?? config.tigerServiceId}`);
+  }
+
+  console.log(`  Agent: ${config.agent}`);
+  if (config.model) {
+    console.log(`  Model: ${config.model}`);
+  }
 }
 
 export const initCommand = new Command('init')
-  .description(
-    'Configure conductor for this project (select default Tiger service)',
-  )
+  .description('Configure conductor for this project')
   .action(initAction);

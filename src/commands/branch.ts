@@ -3,13 +3,9 @@
 // ============================================================================
 
 import { Command } from 'commander';
-import { getConfiguredServiceId } from '../services/config';
+import { type AgentType, readConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
-import {
-  type AgentType,
-  ensureDockerImage,
-  startContainer,
-} from '../services/docker';
+import { ensureDockerImage, startContainer } from '../services/docker';
 import {
   generateBranchName,
   getRepoInfo,
@@ -20,7 +16,8 @@ import { ensureGitignore } from '../utils';
 interface BranchOptions {
   serviceId?: string;
   dbFork: boolean;
-  agent: AgentType;
+  agent?: AgentType;
+  model?: string;
   detach: boolean;
   interactive: boolean;
 }
@@ -71,11 +68,17 @@ export async function branchAction(
   // Step 3: Ensure .gitignore has .conductor/ entry
   await ensureGitignore();
 
-  // Step 4: Determine service ID from options or config
-  const effectiveServiceId: string | null | undefined =
-    options.serviceId || (await getConfiguredServiceId());
+  // Step 4: Read config for defaults
+  const config = await readConfig();
 
-  // Step 5: Fork database (unless --no-db-fork is set or config says null)
+  // Step 5: Determine effective values from options or config
+  const effectiveServiceId: string | null | undefined =
+    options.serviceId ?? config?.tigerServiceId;
+  const effectiveAgent: AgentType =
+    options.agent ?? config?.agent ?? 'opencode';
+  const effectiveModel: string | undefined = options.model ?? config?.model;
+
+  // Step 6: Fork database (unless --no-db-fork is set or config says null)
   let forkResult: ForkResult | null = null;
   if (!options.dbFork) {
     console.log('Skipping database fork (--no-db-fork)');
@@ -90,16 +93,19 @@ export async function branchAction(
     console.log(`  Database fork created: ${forkResult.name}`);
   }
 
-  // Step 6: Ensure Docker image exists (build if missing)
+  // Step 7: Ensure Docker image exists (build if missing)
   await ensureDockerImage();
 
-  // Step 7: Start container (repo will be cloned inside container)
-  console.log(`Starting agent container (using ${options.agent})...`);
+  // Step 8: Start container (repo will be cloned inside container)
+  console.log(
+    `Starting agent container (using ${effectiveAgent}${effectiveModel ? ` with ${effectiveModel}` : ''})...`,
+  );
   const containerId = await startContainer({
     branchName,
     prompt,
     repoInfo,
-    agent: options.agent,
+    agent: effectiveAgent,
+    model: effectiveModel,
     detach: options.detach,
     interactive: options.interactive,
     envVars: forkResult?.envVars,
@@ -111,7 +117,7 @@ export async function branchAction(
     printSummary(branchName, repoInfo, forkResult);
   } else if (options.interactive) {
     // Interactive mode exited
-    console.log(`\n${options.agent} session ended.`);
+    console.log(`\n${effectiveAgent} session ended.`);
   }
 }
 
@@ -127,8 +133,11 @@ export function withBranchOptions<T extends Command>(cmd: T): T {
     .option('--no-db-fork', 'Skip the database fork step')
     .option(
       '-a, --agent <type>',
-      'Agent to use: claude or opencode',
-      'opencode',
+      'Agent to use: claude or opencode (defaults to config or opencode)',
+    )
+    .option(
+      '-m, --model <model>',
+      'Model to use for the agent (defaults to config)',
     )
     .option('-d, --detach', 'Run container in background (detached mode)')
     .option('-i, --interactive', 'Run agent in full TUI mode') as T;

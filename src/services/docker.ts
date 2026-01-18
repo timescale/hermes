@@ -7,6 +7,7 @@ import { join } from 'node:path';
 // Import the Dockerfile as text - Bun's bundler embeds this in the binary
 import SANDBOX_DOCKERFILE from '../../sandbox/Dockerfile' with { type: 'text' };
 import { formatShellError, type ShellError } from '../utils';
+import type { AgentType } from './config';
 import type { RepoInfo } from './git';
 
 // Compute MD5 hash of the Dockerfile content for versioned tagging
@@ -61,13 +62,14 @@ export async function ensureDockerImage(): Promise<void> {
 // Container Management
 // ============================================================================
 
-export type AgentType = 'claude' | 'opencode';
+export type { AgentType } from './config';
 
 export interface StartContainerOptions {
   branchName: string;
   prompt: string;
   repoInfo: RepoInfo;
   agent: AgentType;
+  model?: string;
   detach: boolean;
   interactive: boolean;
   envVars?: Record<string, string>;
@@ -76,8 +78,16 @@ export interface StartContainerOptions {
 export async function startContainer(
   options: StartContainerOptions,
 ): Promise<string | null> {
-  const { branchName, prompt, repoInfo, agent, detach, interactive, envVars } =
-    options;
+  const {
+    branchName,
+    prompt,
+    repoInfo,
+    agent,
+    model,
+    detach,
+    interactive,
+    envVars,
+  } = options;
 
   const conductorEnvPath = '.conductor/.env';
   const conductorEnvFile = Bun.file(conductorEnvPath);
@@ -119,11 +129,12 @@ export async function startContainer(
     volumeArgs.push('-v', `${opencodeConfigDir}:/tmp/opencode-cfg:ro`);
   }
 
-  // Build the agent command based on the selected agent type and mode
+  // Build the agent command based on the selected agent type, model, and mode
+  const modelArg = model ? ` --model ${model}` : '';
   const agentCommand =
     agent === 'claude'
-      ? `claude${interactive ? '' : ' -p'} --dangerously-skip-permissions`
-      : `opencode ${interactive ? '--prompt' : 'run'}`;
+      ? `claude${interactive ? '' : ' -p'}${modelArg} --dangerously-skip-permissions`
+      : `opencode${modelArg} ${interactive ? '--prompt' : 'run'}`;
 
   // Build the startup script that:
   // 1. Copies opencode auth.json if mounted

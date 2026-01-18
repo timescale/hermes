@@ -8,11 +8,19 @@ import { YAML } from 'bun';
 const CONFIG_DIR = '.conductor';
 const CONFIG_FILENAME = `${CONFIG_DIR}/config.yml`;
 
+export type AgentType = 'claude' | 'opencode';
+
 export interface ConductorConfig {
   // Tiger service ID to use as the default parent for database forks
   // null = explicitly "none" (skip DB fork by default)
   // undefined = not set (use tiger CLI default)
   tigerServiceId?: string | null;
+
+  // Default agent to use (claude or opencode)
+  agent?: AgentType;
+
+  // Default model to use for the selected agent
+  model?: string;
 }
 
 /**
