@@ -375,34 +375,40 @@ async function initAction(): Promise<void> {
 
   const result = await wizardPromise;
 
+  await renderer.idle();
   renderer.destroy();
 
+  // Use process.stdout/stderr.write directly to bypass the library's
+  // console capture (which has a bug in restoreOriginalConsole that
+  // re-captures immediately after restoring)
+  const print = (msg: string) => process.stdout.write(`${msg}\n`);
+  const printErr = (msg: string) => process.stderr.write(`${msg}\n`);
+
   if (result.type === 'cancelled') {
-    console.log('\nCancelled. No changes made.');
+    print('\nCancelled. No changes made.');
     return;
   }
 
   if (result.type === 'error') {
-    console.error(`\nError: ${result.message}`);
+    printErr(`\nError: ${result.message}`);
     process.exit(1);
   }
 
   const config = result.config;
   await writeConfig(config);
 
-  console.log('\nConfiguration saved to .conductor/config.yml');
-  console.log('');
-  console.log('Summary:');
+  print('\nConfiguration saved to .conductor/config.yml');
+  print('\nSummary:');
 
   if (config.tigerServiceId === null) {
-    console.log('  Database: (None) - forks will be skipped by default');
+    print('  Database: (None) - forks will be skipped by default');
   } else if (config.tigerServiceId) {
-    console.log(`  Database: ${config.tigerServiceId}`);
+    print(`  Database: ${config.tigerServiceId}`);
   }
 
-  console.log(`  Agent: ${config.agent}`);
+  print(`  Agent: ${config.agent}`);
   if (config.model) {
-    console.log(`  Model: ${config.model}`);
+    print(`  Model: ${config.model}`);
   }
 }
 
