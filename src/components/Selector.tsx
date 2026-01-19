@@ -1,5 +1,5 @@
 import type { ScrollBoxRenderable } from '@opentui/core';
-import { useKeyboard } from '@opentui/react';
+import { flushSync, useKeyboard } from '@opentui/react';
 import { useEffect, useRef, useState } from 'react';
 import {
   type BaseSelectorProps,
@@ -57,14 +57,15 @@ export function Selector({
     if (showBack && onBack && (key.name === 'backspace' || key.name === 'b')) {
       onBack();
     }
+    // Use flushSync to render and scroll in one frame to avoid flicker
     if (key.name === 'up') {
       const newIndex = Math.max(0, selectedIndex - 1);
-      setSelectedIndex(newIndex);
+      flushSync(() => setSelectedIndex(newIndex));
       scrollToIndex(scrollboxRef.current, newIndex);
     }
     if (key.name === 'down') {
       const newIndex = Math.min(options.length - 1, selectedIndex + 1);
-      setSelectedIndex(newIndex);
+      flushSync(() => setSelectedIndex(newIndex));
       scrollToIndex(scrollboxRef.current, newIndex);
     }
     if (key.name === 'return' && options.length > 0) {
