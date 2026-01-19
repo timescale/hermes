@@ -5,7 +5,7 @@
 import { createCliRenderer, type SelectOption } from '@opentui/core';
 import { createRoot } from '@opentui/react';
 import { Command } from 'commander';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FilterableSelector } from '../components/FilterableSelector';
 import { Loading } from '../components/Loading';
 import { Selector } from '../components/Selector';
@@ -29,8 +29,6 @@ import { listServices, type TigerService } from '../services/tiger';
 // Types
 // ============================================================================
 
-type Step = 'loading' | 'service' | 'agent' | 'install-opencode' | 'model';
-
 type WizardResult =
   | { type: 'completed'; config: ConductorConfig }
   | { type: 'cancelled' }
@@ -42,110 +40,125 @@ interface ModelOption {
   description: string;
 }
 
-interface PrefetchedModels {
-  claude: ModelOption[];
-  opencode: ModelOption[];
-}
-
-interface LoadedData {
-  services: TigerService[];
-  models: PrefetchedModels;
-  initialConfig: ConductorConfig;
-  opencodeInstalled: boolean;
-}
-
 // ============================================================================
-// Wizard Steps Component
+// App Component
 // ============================================================================
 
-interface WizardStepsProps {
-  data: LoadedData;
+interface AppProps {
   onComplete: (result: WizardResult) => void;
 }
 
-function WizardSteps({ data, onComplete }: WizardStepsProps) {
-  const { services, models: prefetchedModels, initialConfig } = data;
+function App({ onComplete }: AppProps) {
+  // Create all promises immediately (only once via useMemo)
+  const configPromise = useMemo(
+    () =>
+      Promise.all([readLocalConfig(), readHomeConfig()]).then(([local, home]) =>
+        mergeConfig(local, home),
+      ),
+    [],
+  );
+  const servicesPromise = useMemo(() => listServices(), []);
+  const claudeModelsPromise = useMemo(
+    () => getModelsForAgent('claude').then((m) => [...m]),
+    [],
+  );
+  const opencodeInstalledPromise = useMemo(() => isOpencodeInstalled(), []);
+  const opencodeModelsPromise = useMemo(
+    () =>
+      opencodeInstalledPromise.then((installed) =>
+        installed ? getModelsForAgent('opencode').then((m) => [...m]) : [],
+      ),
+    [opencodeInstalledPromise],
+  );
+
   const [step, setStep] = useState<
     'service' | 'agent' | 'install-opencode' | 'model'
   >('service');
-  const [config, setConfig] = useState<ConductorConfig>({ ...initialConfig });
-  const [opencodeInstalled, setOpencodeInstalled] = useState(
-    data.opencodeInstalled,
+  const [config, setConfig] = useState<ConductorConfig | null>(null);
+
+  // Async data - null means still loading
+  const [services, setServices] = useState<TigerService[] | null>(null);
+  const [claudeModels, setClaudeModels] = useState<ModelOption[] | null>(null);
+  const [opencodeInstalled, setOpencodeInstalled] = useState<boolean | null>(
+    null,
   );
-  const [opencodeModels, setOpencodeModels] = useState(
-    prefetchedModels.opencode,
+  const [opencodeModels, setOpencodeModels] = useState<ModelOption[] | null>(
+    null,
   );
   const [isInstalling, setIsInstalling] = useState(false);
 
-  // Build service options
-  const serviceOptions: SelectOption[] = [
-    {
-      name: '(None)',
-      description: "This project doesn't need database forks",
-      value: '__null__',
-    },
-    ...services.map((svc) => ({
-      name: svc.name,
-      description: `${svc.service_id} - ${svc.metadata.environment}, ${svc.region_code}, ${svc.status}${svc.paused ? ' (PAUSED)' : ''}`,
-      value: svc.service_id,
-    })),
-  ];
+  // Load data from promises
+  useEffect(() => {
+    configPromise.then(setConfig).catch((err) =>
+      onComplete({
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }, [configPromise, onComplete]);
 
-  const serviceInitialIndex =
-    config.tigerServiceId === null
-      ? 0
-      : config.tigerServiceId
-        ? serviceOptions.findIndex((opt) => opt.value === config.tigerServiceId)
-        : 0;
+  useEffect(() => {
+    servicesPromise.then(setServices).catch(() => setServices([]));
+  }, [servicesPromise]);
 
-  // Build agent options
-  const agentOptions: SelectOption[] = AGENTS.map((agent) => ({
-    name: agent.name,
-    description: agent.description,
-    value: agent.id,
-  }));
+  useEffect(() => {
+    claudeModelsPromise.then(setClaudeModels).catch(() => setClaudeModels([]));
+  }, [claudeModelsPromise]);
 
-  const agentInitialIndex = config.agent
-    ? agentOptions.findIndex((opt) => opt.value === config.agent)
-    : 0;
+  useEffect(() => {
+    opencodeInstalledPromise
+      .then(setOpencodeInstalled)
+      .catch(() => setOpencodeInstalled(false));
+  }, [opencodeInstalledPromise]);
 
-  // Get model options for current agent
-  const currentModelOptions = config.agent
-    ? config.agent === 'opencode'
-      ? opencodeModels
-      : prefetchedModels[config.agent]
-    : [];
-
-  const modelSelectOptions: SelectOption[] = currentModelOptions.map(
-    (model) => ({
-      name: model.name,
-      description: model.description,
-      value: model.id,
-    }),
-  );
-
-  const modelInitialIndex = config.model
-    ? modelSelectOptions.findIndex((opt) => opt.value === config.model)
-    : modelSelectOptions.findIndex((opt) =>
-        config.agent === 'claude'
-          ? opt.value === 'sonnet'
-          : opt.value === 'anthropic/claude-sonnet-4-5',
-      );
+  useEffect(() => {
+    opencodeModelsPromise
+      .then(setOpencodeModels)
+      .catch(() => setOpencodeModels([]));
+  }, [opencodeModelsPromise]);
 
   const handleCancel = () => {
     onComplete({ type: 'cancelled' });
   };
 
+  // ---- Step 1: Service Selection ----
   if (step === 'service') {
+    // Need config and services
+    if (config === null || services === null) {
+      return <Loading title="Loading services" onCancel={handleCancel} />;
+    }
+
+    const serviceOptions: SelectOption[] = [
+      {
+        name: '(None)',
+        description: "This project doesn't need database forks",
+        value: '__null__',
+      },
+      ...services.map((svc: TigerService) => ({
+        name: svc.name,
+        description: `${svc.service_id} - ${svc.metadata.environment}, ${svc.region_code}, ${svc.status}${svc.paused ? ' (PAUSED)' : ''}`,
+        value: svc.service_id,
+      })),
+    ];
+
+    const initialIndex =
+      config.tigerServiceId === null
+        ? 0
+        : config.tigerServiceId
+          ? serviceOptions.findIndex(
+              (opt) => opt.value === config.tigerServiceId,
+            )
+          : 0;
+
     return (
       <Selector
         title="Step 1/3: Database Service"
         description="Select a Tiger service to use as the default parent for database forks."
         options={serviceOptions}
-        initialIndex={serviceInitialIndex >= 0 ? serviceInitialIndex : 0}
+        initialIndex={initialIndex >= 0 ? initialIndex : 0}
         showBack={false}
         onSelect={(value) => {
-          setConfig((c) => ({ ...c, tigerServiceId: value }));
+          setConfig((c) => (c ? { ...c, tigerServiceId: value } : c));
           setStep('agent');
         }}
         onCancel={handleCancel}
@@ -153,31 +166,46 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
     );
   }
 
+  // ---- Step 2: Agent Selection ----
   if (step === 'agent') {
+    // Need opencodeInstalled to know whether to show install prompt
+    if (opencodeInstalled === null) {
+      return <Loading title="Loading" onCancel={handleCancel} />;
+    }
+
+    const agentOptions: SelectOption[] = AGENTS.map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+      value: agent.id,
+    }));
+
+    const initialIndex = config?.agent
+      ? agentOptions.findIndex((opt) => opt.value === config.agent)
+      : 0;
+
     return (
       <Selector
         title="Step 2/3: Default Agent"
         description="Select the default coding agent to use."
         options={agentOptions}
-        initialIndex={agentInitialIndex >= 0 ? agentInitialIndex : 0}
+        initialIndex={initialIndex >= 0 ? initialIndex : 0}
         showBack
         onSelect={(value) => {
           const newAgent = value as AgentType;
 
           // If opencode is selected but not installed, show install prompt
           if (newAgent === 'opencode' && !opencodeInstalled) {
-            setConfig((c) => ({ ...c, agent: newAgent }));
+            setConfig((c) => (c ? { ...c, agent: newAgent } : c));
             setStep('install-opencode');
             return;
           }
 
+          // Get models for the selected agent
           const models =
-            newAgent === 'opencode'
-              ? opencodeModels
-              : prefetchedModels[newAgent];
+            newAgent === 'opencode' ? opencodeModels : claudeModels;
 
-          // If no models for this agent, complete wizard immediately
-          if (models.length === 0) {
+          // If no models, complete wizard
+          if (!models || models.length === 0) {
             onComplete({
               type: 'completed',
               config: { ...config, agent: newAgent, model: undefined },
@@ -188,8 +216,7 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
           setConfig((c) => ({
             ...c,
             agent: newAgent,
-            // Clear model if agent changed
-            model: c.agent !== newAgent ? undefined : c.model,
+            model: c?.agent !== newAgent ? undefined : c?.model,
           }));
           setStep('model');
         }}
@@ -199,7 +226,12 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
     );
   }
 
+  // ---- Step 2.5: Install OpenCode ----
   if (step === 'install-opencode') {
+    if (isInstalling) {
+      return <Loading title="Installing opencode" onCancel={handleCancel} />;
+    }
+
     const installOptions: SelectOption[] = [
       {
         name: 'Install OpenCode',
@@ -212,10 +244,6 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
         value: 'back',
       },
     ];
-
-    if (isInstalling) {
-      return <Loading title="Installing opencode" onCancel={handleCancel} />;
-    }
 
     return (
       <Selector
@@ -230,7 +258,6 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
             return;
           }
 
-          // Install opencode and fetch models before hiding loading screen
           setIsInstalling(true);
           const result = await installOpencode();
 
@@ -243,7 +270,7 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
             return;
           }
 
-          // Refresh opencode models after installation (still showing loading)
+          // Refresh opencode models after installation
           const models = await getModelsForAgent('opencode');
           setOpencodeModels([...models]);
           setOpencodeInstalled(true);
@@ -265,20 +292,47 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
     );
   }
 
+  // ---- Step 3: Model Selection ----
   if (step === 'model') {
+    const currentModels =
+      config?.agent === 'opencode' ? opencodeModels : claudeModels;
+
+    // Need models for the selected agent
+    if (currentModels === null) {
+      return <Loading title="Loading models" onCancel={handleCancel} />;
+    }
+
+    const modelOptions: SelectOption[] = currentModels.map(
+      (model: ModelOption) => ({
+        name: model.name,
+        description: model.description,
+        value: model.id,
+      }),
+    );
+
+    const initialIndex = config?.model
+      ? modelOptions.findIndex((opt) => opt.value === config.model)
+      : modelOptions.findIndex((opt) =>
+          config?.agent === 'claude'
+            ? opt.value === 'sonnet'
+            : opt.value === 'anthropic/claude-sonnet-4-5',
+        );
+
     const handleModelSelect = (value: string | null) => {
-      const finalConfig = { ...config, model: value || undefined };
-      onComplete({ type: 'completed', config: finalConfig });
+      onComplete({
+        type: 'completed',
+        config: { ...config, model: value || undefined },
+      });
     };
 
     // Use filterable selector for opencode (has many more models)
-    if (config.agent === 'opencode') {
+    if (config?.agent === 'opencode') {
       return (
         <FilterableSelector
           title={`Step 3/3: Default Model (${config.agent})`}
           description={`Select the default model for ${config.agent}.`}
-          options={modelSelectOptions}
-          initialIndex={modelInitialIndex >= 0 ? modelInitialIndex : 0}
+          options={modelOptions}
+          initialIndex={initialIndex >= 0 ? initialIndex : 0}
           showBack
           onSelect={handleModelSelect}
           onCancel={handleCancel}
@@ -289,10 +343,10 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
 
     return (
       <Selector
-        title={`Step 3/3: Default Model (${config.agent})`}
-        description={`Select the default model for ${config.agent}.`}
-        options={modelSelectOptions}
-        initialIndex={modelInitialIndex >= 0 ? modelInitialIndex : 0}
+        title={`Step 3/3: Default Model (${config?.agent})`}
+        description={`Select the default model for ${config?.agent}.`}
+        options={modelOptions}
+        initialIndex={initialIndex >= 0 ? initialIndex : 0}
         showBack
         onSelect={handleModelSelect}
         onCancel={handleCancel}
@@ -305,104 +359,22 @@ function WizardSteps({ data, onComplete }: WizardStepsProps) {
 }
 
 // ============================================================================
-// Main App Component (handles loading -> wizard transition)
-// ============================================================================
-
-interface AppProps {
-  onComplete: (result: WizardResult) => void;
-}
-
-function App({ onComplete }: AppProps) {
-  const [step, setStep] = useState<Step>('loading');
-  const [loadedData, setLoadedData] = useState<LoadedData | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadData() {
-      try {
-        // Load config and data in parallel
-        const [
-          localConfig,
-          homeConfig,
-          services,
-          claudeModels,
-          opencodeInstalled,
-        ] = await Promise.all([
-          readLocalConfig(),
-          readHomeConfig(),
-          listServices(),
-          getModelsForAgent('claude'),
-          isOpencodeInstalled(),
-        ]);
-
-        // Only fetch opencode models if it's installed
-        const opencodeModels = opencodeInstalled
-          ? await getModelsForAgent('opencode')
-          : [];
-
-        if (cancelled) return;
-
-        const initialConfig = mergeConfig(localConfig, homeConfig);
-
-        setLoadedData({
-          services,
-          models: {
-            claude: [...claudeModels],
-            opencode: [...opencodeModels],
-          },
-          initialConfig,
-          opencodeInstalled,
-        });
-        setStep('service');
-      } catch (err) {
-        if (cancelled) return;
-        onComplete({
-          type: 'error',
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    loadData();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [onComplete]);
-
-  if (step === 'loading') {
-    return <Loading onCancel={() => onComplete({ type: 'cancelled' })} />;
-  }
-
-  if (loadedData) {
-    return <WizardSteps data={loadedData} onComplete={onComplete} />;
-  }
-
-  return null;
-}
-
-// ============================================================================
 // Main Init Action
 // ============================================================================
 
 async function initAction(): Promise<void> {
-  // Create promise for wizard completion
   let resolveWizard: (result: WizardResult) => void;
   const wizardPromise = new Promise<WizardResult>((resolve) => {
     resolveWizard = resolve;
   });
 
-  // Start the TUI immediately
   const renderer = await createCliRenderer({ exitOnCtrlC: true });
   const root = createRoot(renderer);
 
   root.render(<App onComplete={(result) => resolveWizard(result)} />);
 
-  // Wait for wizard to complete
   const result = await wizardPromise;
 
-  // Clean up renderer
   renderer.destroy();
 
   if (result.type === 'cancelled') {
@@ -415,11 +387,9 @@ async function initAction(): Promise<void> {
     process.exit(1);
   }
 
-  // Write the config
   const config = result.config;
   await writeConfig(config);
 
-  // Print confirmation
   console.log('\nConfiguration saved to .conductor/config.yml');
   console.log('');
   console.log('Summary:');
