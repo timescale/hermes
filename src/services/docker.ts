@@ -4,6 +4,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { nanoid } from 'nanoid';
 // Import the Dockerfile as text - Bun's bundler embeds this in the binary
 import SANDBOX_DOCKERFILE from '../../sandbox/Dockerfile' with { type: 'text' };
 import { formatShellError, type ShellError } from '../utils';
@@ -82,12 +83,14 @@ export interface StartContainerOptions {
 export interface HermesSession {
   containerId: string;
   containerName: string;
+  name: string;
   branch: string;
   agent: AgentType;
   model?: string;
   repo: string;
   prompt: string;
   created: string;
+  resumedFrom?: string;
   status: 'running' | 'exited' | 'paused' | 'restarting' | 'dead' | 'created';
   exitCode?: number;
   startedAt?: string;
@@ -109,6 +112,7 @@ interface DockerInspectResult {
   };
   Config: {
     Labels: Record<string, string>;
+    Env?: string[];
   };
 }
 
@@ -158,12 +162,14 @@ export async function listHermesSessions(): Promise<HermesSession[]> {
       return {
         containerId: container.Id.slice(0, 12),
         containerName: container.Name.replace(/^\//, ''),
+        name: labels['hermes.name'] || labels['hermes.branch'] || 'unknown',
         branch: labels['hermes.branch'] || 'unknown',
         agent: (labels['hermes.agent'] as AgentType) || 'opencode',
         model: labels['hermes.model'],
         repo: labels['hermes.repo'] || 'unknown',
         prompt: labels['hermes.prompt'] || '',
         created: labels['hermes.created'] || '',
+        resumedFrom: labels['hermes.resumed-from'],
         status,
         exitCode: status === 'exited' ? state.ExitCode : undefined,
         startedAt: state.StartedAt,
@@ -180,7 +186,29 @@ export async function listHermesSessions(): Promise<HermesSession[]> {
  * Remove a hermes container by name or ID
  */
 export async function removeContainer(nameOrId: string): Promise<void> {
+  let resumeImage: string | null = null;
+  try {
+    const result = await Bun.$`docker inspect ${nameOrId}`.quiet();
+    const containers: DockerInspectResult[] = JSON.parse(
+      result.stdout.toString(),
+    );
+    const container = containers[0];
+    if (container) {
+      resumeImage = container.Config.Labels?.['hermes.resume-image'] ?? null;
+    }
+  } catch {
+    resumeImage = null;
+  }
+
   await Bun.$`docker rm -f ${nameOrId}`.quiet();
+
+  if (resumeImage) {
+    try {
+      await Bun.$`docker rmi ${resumeImage}`.quiet();
+    } catch {
+      // Ignore image removal errors
+    }
+  }
 }
 
 /**
@@ -290,6 +318,169 @@ export async function attachToContainer(nameOrId: string): Promise<void> {
   await proc.exited;
 }
 
+// ============================================================================
+// Container Resume
+// ============================================================================
+
+export interface ResumeSessionOptions {
+  mode: 'interactive' | 'detached';
+  prompt?: string;
+}
+
+function buildResumeAgentCommand(
+  agent: AgentType,
+  mode: ResumeSessionOptions['mode'],
+  model?: string,
+): string {
+  const modelArg = model ? ` --model ${model}` : '';
+
+  if (agent === 'claude') {
+    const promptArg = mode === 'detached' ? ' -p' : '';
+    return `claude -c${promptArg}${modelArg} --dangerously-skip-permissions`;
+  }
+
+  if (mode === 'detached') {
+    return `opencode${modelArg} run -c`;
+  }
+
+  return `opencode${modelArg} -c`;
+}
+
+export async function resumeSession(
+  nameOrId: string,
+  options: ResumeSessionOptions,
+): Promise<string> {
+  const { mode, prompt } = options;
+
+  if (mode === 'detached' && (!prompt || prompt.trim().length === 0)) {
+    throw new Error('Prompt is required for detached resume');
+  }
+
+  let container: DockerInspectResult | undefined;
+  try {
+    const result = await Bun.$`docker inspect ${nameOrId}`.quiet();
+    const containers: DockerInspectResult[] = JSON.parse(
+      result.stdout.toString(),
+    );
+    container = containers[0];
+  } catch {
+    throw new Error(`Container ${nameOrId} not found`);
+  }
+
+  if (!container) {
+    throw new Error(`Container ${nameOrId} not found`);
+  }
+
+  const labels = container.Config.Labels ?? {};
+  if (labels['hermes.managed'] !== 'true') {
+    throw new Error('Container is not managed by hermes');
+  }
+
+  if (container.State?.Running) {
+    throw new Error('Container is already running');
+  }
+
+  const agent = (labels['hermes.agent'] as AgentType) || 'opencode';
+  const model = labels['hermes.model'];
+  const resumeSuffix = nanoid(6).toLowerCase();
+  const resumeImage = `hermes-resume:${container.Id.slice(0, 12)}-${resumeSuffix}`;
+
+  try {
+    await Bun.$`docker commit ${container.Id} ${resumeImage}`.quiet();
+  } catch (err) {
+    throw formatShellError(err as ShellError);
+  }
+
+  const envArgs: string[] = [];
+  for (const envVar of container.Config.Env ?? []) {
+    envArgs.push('-e', envVar);
+  }
+
+  const baseName = container.Name.replace(/\//g, '').trim();
+  const containerName = `${baseName}-resumed-${resumeSuffix}`;
+
+  const resumePrompt =
+    mode === 'detached' ? prompt?.trim() || '' : labels['hermes.prompt'] || '';
+  const baseSessionName =
+    labels['hermes.name'] || labels['hermes.branch'] || 'session';
+  const resumeName = `${baseSessionName}-resumed-${resumeSuffix}`;
+  const agentCommand = buildResumeAgentCommand(agent, mode, model);
+  const resumeScript =
+    mode === 'detached' && prompt
+      ? `
+set -e
+cd /work/app
+exec ${agentCommand} <<'HERMES_PROMPT_HEREDOC'
+${prompt}
+
+HERMES_PROMPT_HEREDOC
+`.trim()
+      : `
+set -e
+cd /work/app
+exec ${agentCommand}
+`.trim();
+
+  const labelArgs: string[] = [
+    '--label',
+    'hermes.managed=true',
+    '--label',
+    `hermes.name=${resumeName}`,
+    '--label',
+    `hermes.branch=${labels['hermes.branch'] ?? 'unknown'}`,
+    '--label',
+    `hermes.agent=${agent}`,
+    '--label',
+    `hermes.repo=${labels['hermes.repo'] ?? 'unknown'}`,
+    '--label',
+    `hermes.created=${new Date().toISOString()}`,
+    '--label',
+    `hermes.prompt=${resumePrompt}`,
+    '--label',
+    `hermes.resumed-from=${container.Name.replace(/^\//, '')}`,
+    '--label',
+    `hermes.resume-image=${resumeImage}`,
+  ];
+  if (model) {
+    labelArgs.push('--label', `hermes.model=${model}`);
+  }
+
+  try {
+    if (mode === 'detached') {
+      const result = await Bun.$`docker run -d \
+        --name ${containerName} \
+        ${labelArgs} \
+        ${envArgs} \
+        ${resumeImage} \
+        bash -c ${resumeScript}`.quiet();
+      return result.stdout.toString().trim();
+    }
+
+    const proc = Bun.spawn(
+      [
+        'docker',
+        'run',
+        '-it',
+        '--name',
+        containerName,
+        ...labelArgs,
+        ...envArgs,
+        resumeImage,
+        'bash',
+        '-c',
+        resumeScript,
+      ],
+      {
+        stdio: ['inherit', 'inherit', 'inherit'],
+      },
+    );
+    await proc.exited;
+    return containerName;
+  } catch (err) {
+    throw formatShellError(err as ShellError);
+  }
+}
+
 /**
  * Get a single session by container ID or name
  */
@@ -334,12 +525,14 @@ export async function getSession(
     return {
       containerId: container.Id.slice(0, 12),
       containerName: container.Name.replace(/^\//, ''),
+      name: labels['hermes.name'] || labels['hermes.branch'] || 'unknown',
       branch: labels['hermes.branch'] || 'unknown',
       agent: (labels['hermes.agent'] as AgentType) || 'opencode',
       model: labels['hermes.model'],
       repo: labels['hermes.repo'] || 'unknown',
       prompt: labels['hermes.prompt'] || '',
       created: labels['hermes.created'] || '',
+      resumedFrom: labels['hermes.resumed-from'],
       status,
       exitCode: status === 'exited' ? state.ExitCode : undefined,
       startedAt: state.StartedAt,
@@ -446,6 +639,8 @@ HERMES_PROMPT_HEREDOC
   const labelArgs: string[] = [
     '--label',
     'hermes.managed=true',
+    '--label',
+    `hermes.name=${branchName}`,
     '--label',
     `hermes.branch=${branchName}`,
     '--label',

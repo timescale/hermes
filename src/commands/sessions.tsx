@@ -5,7 +5,7 @@
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
 import { Command } from 'commander';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { SessionDetail } from '../components/SessionDetail';
 import { SessionsList } from '../components/SessionsList';
 import {
@@ -13,6 +13,7 @@ import {
   type HermesSession,
   listHermesSessions,
   removeContainer,
+  resumeSession,
 } from '../services/docker';
 
 // ============================================================================
@@ -24,7 +25,7 @@ type SessionsView =
   | { type: 'detail'; session: HermesSession };
 
 interface SessionsResult {
-  type: 'quit' | 'attach';
+  type: 'quit' | 'attach' | 'resume';
   containerId?: string;
 }
 
@@ -34,6 +35,26 @@ interface SessionsAppProps {
 
 function SessionsApp({ onComplete }: SessionsAppProps) {
   const [view, setView] = useState<SessionsView>({ type: 'list' });
+  const handleResume = useCallback(
+    async (
+      containerId: string,
+      mode: 'interactive' | 'detached',
+      prompt?: string,
+    ) => {
+      if (mode === 'interactive') {
+        onComplete({ type: 'resume', containerId });
+        return;
+      }
+
+      if (!prompt) {
+        throw new Error('Prompt is required for detached resume');
+      }
+
+      await resumeSession(containerId, { mode: 'detached', prompt });
+      setView({ type: 'list' });
+    },
+    [onComplete],
+  );
 
   if (view.type === 'detail') {
     return (
@@ -42,6 +63,7 @@ function SessionsApp({ onComplete }: SessionsAppProps) {
         onBack={() => setView({ type: 'list' })}
         onQuit={() => onComplete({ type: 'quit' })}
         onAttach={(containerId) => onComplete({ type: 'attach', containerId })}
+        onResume={handleResume}
         onSessionDeleted={() => setView({ type: 'list' })}
       />
     );
@@ -74,6 +96,16 @@ async function runSessionsTui(): Promise<void> {
   // Handle attach action - needs to happen after TUI cleanup
   if (result.type === 'attach' && result.containerId) {
     await attachToContainer(result.containerId);
+  }
+
+  if (result.type === 'resume' && result.containerId) {
+    try {
+      await resumeSession(result.containerId, {
+        mode: 'interactive',
+      });
+    } catch (err) {
+      console.error(`Failed to resume: ${err}`);
+    }
   }
 }
 
@@ -137,9 +169,9 @@ function truncate(str: string, maxLen: number): string {
 }
 
 function printTable(sessions: HermesSession[]): void {
-  const headers = ['BRANCH', 'STATUS', 'AGENT', 'REPO', 'CREATED', 'PROMPT'];
+  const headers = ['NAME', 'STATUS', 'AGENT', 'REPO', 'CREATED', 'PROMPT'];
   const rows = sessions.map((s) => [
-    s.branch,
+    s.name,
     getStatusDisplay(s),
     s.model ? `${s.agent}/${s.model}` : s.agent,
     s.repo,

@@ -9,6 +9,8 @@ import {
 import { ConfirmModal } from './ConfirmModal';
 import { Frame } from './Frame';
 import { LogViewer } from './LogViewer';
+import { PromptModal } from './PromptModal';
+import { ResumeModal } from './ResumeModal';
 import { Toast, type ToastType } from './Toast';
 
 export interface SessionDetailProps {
@@ -16,10 +18,15 @@ export interface SessionDetailProps {
   onBack: () => void;
   onQuit: () => void;
   onAttach: (containerId: string) => void;
+  onResume: (
+    containerId: string,
+    mode: 'interactive' | 'detached',
+    prompt?: string,
+  ) => Promise<void> | void;
   onSessionDeleted: () => void;
 }
 
-type ModalType = 'stop' | 'delete' | null;
+type ModalType = 'stop' | 'delete' | 'resume' | 'resumePrompt' | null;
 
 interface ToastState {
   message: string;
@@ -89,6 +96,7 @@ export function SessionDetail({
   onBack,
   onQuit,
   onAttach,
+  onResume,
   onSessionDeleted,
 }: SessionDetailProps) {
   const [session, setSession] = useState(initialSession);
@@ -122,6 +130,7 @@ export function SessionDetail({
   const handleStop = useCallback(async () => {
     setModal(null);
     setActionInProgress(true);
+    showToast('Stopping container...', 'info');
     try {
       await stopContainer(session.containerId);
       showToast('Container stopped', 'success');
@@ -150,6 +159,33 @@ export function SessionDetail({
     }
   }, [session.containerId, showToast, onSessionDeleted]);
 
+  const handleResumeInteractive = useCallback(() => {
+    setModal(null);
+    onResume(session.containerId, 'interactive');
+  }, [onResume, session.containerId]);
+
+  const handleResumeDetached = useCallback(() => {
+    setModal('resumePrompt');
+  }, []);
+
+  const handleResumePromptSubmit = useCallback(
+    async (prompt: string) => {
+      setModal(null);
+      setActionInProgress(true);
+      showToast('Resuming in background...', 'info');
+      try {
+        await onResume(session.containerId, 'detached', prompt);
+        showToast('Resume started', 'success');
+        onBack();
+      } catch (err) {
+        showToast(`Failed to resume: ${err}`, 'error');
+      } finally {
+        setActionInProgress(false);
+      }
+    },
+    [onBack, onResume, session.containerId, showToast],
+  );
+
   const handleLogError = useCallback(
     (error: string) => {
       showToast(error, 'error');
@@ -176,6 +212,8 @@ export function SessionDetail({
       setModal('delete');
     } else if (key.raw === 'a' && isRunning) {
       onAttach(session.containerId);
+    } else if (key.raw === 'r' && isStopped) {
+      setModal('resume');
     }
   });
 
@@ -185,6 +223,7 @@ export function SessionDetail({
   const agentDisplay = session.model
     ? `${session.agent} (${session.model})`
     : session.agent;
+  const metadataHeight = session.resumedFrom ? 5 : 4;
 
   // Build help text based on available actions
   const actions: string[] = [];
@@ -192,7 +231,7 @@ export function SessionDetail({
     actions.push('[s]top', '[a]ttach');
   }
   if (isStopped) {
-    actions.push('[d]elete');
+    actions.push('[r]esume', '[d]elete');
   }
   actions.push('[b]ack', '[q]uit');
   const helpText = actions.join('  ');
@@ -200,7 +239,13 @@ export function SessionDetail({
   return (
     <Frame title={session.branch}>
       {/* Metadata section */}
-      <box style={{ height: 3, flexDirection: 'column', marginBottom: 1 }}>
+      <box
+        style={{
+          height: metadataHeight,
+          flexDirection: 'column',
+          marginBottom: 1,
+        }}
+      >
         <box style={{ height: 1, flexDirection: 'row' }}>
           <text style={{ height: 1 }}>
             Status:{' '}
@@ -220,10 +265,20 @@ export function SessionDetail({
           <text style={{ height: 1 }}>Agent: {agentDisplay}</text>
         </box>
         <box style={{ height: 1, flexDirection: 'row' }}>
-          <text style={{ height: 1 }}>Branch: hermes/{session.branch}</text>
+          <text style={{ height: 1 }}>Name: {session.name}</text>
           <text style={{ height: 1, flexGrow: 1 }} />
+          <text style={{ height: 1 }}>Branch: hermes/{session.branch}</text>
+        </box>
+        <box style={{ height: 1, flexDirection: 'row' }}>
           <text style={{ height: 1 }}>Container: {session.containerName}</text>
         </box>
+        {session.resumedFrom && (
+          <box style={{ height: 1, flexDirection: 'row' }}>
+            <text style={{ height: 1 }}>
+              Resumed From: {session.resumedFrom}
+            </text>
+          </box>
+        )}
       </box>
 
       {/* Prompt section */}
@@ -281,6 +336,26 @@ export function SessionDetail({
           confirmLabel="Delete"
           confirmColor="#ff6b6b"
           onConfirm={handleDelete}
+          onCancel={() => setModal(null)}
+        />
+      )}
+
+      {modal === 'resume' && (
+        <ResumeModal
+          title="Resume Session"
+          message={`Resume ${session.containerName}?`}
+          onInteractive={handleResumeInteractive}
+          onDetached={handleResumeDetached}
+          onCancel={() => setModal(null)}
+        />
+      )}
+
+      {modal === 'resumePrompt' && (
+        <PromptModal
+          title="Resume (Detached)"
+          message="Enter a prompt to continue this session."
+          placeholder="Add a prompt for the resumed agent"
+          onSubmit={handleResumePromptSubmit}
           onCancel={() => setModal(null)}
         />
       )}

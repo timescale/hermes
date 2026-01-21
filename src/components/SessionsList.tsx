@@ -102,10 +102,11 @@ export function SessionsList({ onSelect, onQuit }: SessionsListProps) {
       return false;
     }
 
-    // Text filter (search branch, repo, prompt)
+    // Text filter (search name, branch, repo, prompt)
     if (filterText) {
       const searchText = filterText.toLowerCase();
       const matches =
+        session.name.toLowerCase().includes(searchText) ||
         session.branch.toLowerCase().includes(searchText) ||
         session.repo.toLowerCase().includes(searchText) ||
         session.prompt.toLowerCase().includes(searchText);
@@ -262,7 +263,7 @@ export function SessionsList({ onSelect, onQuit }: SessionsListProps) {
       >
         <text style={{ height: 1, width: 3 }} />
         <text style={{ height: 1, flexGrow: 2, flexBasis: 0, fg: '#888888' }}>
-          BRANCH
+          NAME
         </text>
         <text style={{ height: 1, width: 12, fg: '#888888' }}>STATUS</text>
         <text style={{ height: 1, flexGrow: 1, flexBasis: 0, fg: '#888888' }}>
@@ -337,7 +338,7 @@ export function SessionsList({ onSelect, onQuit }: SessionsListProps) {
                     fg: isSelected ? '#ffffff' : undefined,
                   }}
                 >
-                  {session.branch}
+                  {session.name}
                 </text>
                 <text
                   style={{
