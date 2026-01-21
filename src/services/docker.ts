@@ -431,14 +431,15 @@ cp /tmp/opencode-cfg/auth.json ~/.local/share/opencode/auth.json
 set -e
 ${opencodeAuthSetup}
 cd /work
-gh auth setup-git
-gh repo clone ${repoInfo.fullName} app
-cd app
-git switch -c "hermes/${branchName}"
-exec ${agentCommand} \\
-  "${prompt.replace(/"/g, '\\"')}
+ gh auth setup-git
+ gh repo clone ${repoInfo.fullName} app
+ cd app
+ git switch -c "hermes/${branchName}"
+ exec ${agentCommand} <<'HERMES_PROMPT_HEREDOC'
+${prompt}
 
-Use the \\\`gh\\\` command to create a PR when done."
+Use the \`gh\` command to create a PR when done.
+HERMES_PROMPT_HEREDOC
 `.trim();
 
   // Build label arguments for hermes metadata

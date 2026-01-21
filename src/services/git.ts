@@ -2,6 +2,7 @@
 // Git & Branch Name Services
 // ============================================================================
 
+import { nanoid } from 'nanoid';
 import { formatShellError, type ShellError } from '../utils';
 
 export interface RepoInfo {
@@ -41,14 +42,22 @@ export async function getRepoInfo(): Promise<RepoInfo> {
   };
 }
 
-function isValidBranchName(name: string): boolean {
+function isValidBranchName(name: string): [boolean, string] {
   // Must start with letter, contain only lowercase letters, numbers, hyphens
   // Must end with letter or number, max 50 chars
-  if (name.length === 0 || name.length > 50) return false;
-  if (!/^[a-z][a-z0-9-]*[a-z0-9]$/.test(name) && !/^[a-z]$/.test(name))
-    return false;
-  if (name.includes('--')) return false; // No double hyphens
-  return true;
+  if (!name || name.length < 5) {
+    return [false, 'too short'];
+  }
+  if (name.length > 50) {
+    return [false, 'too long'];
+  }
+  if (!/^[a-z][a-z0-9-]*[a-z0-9]$/.test(name) && !/^[a-z]$/.test(name)) {
+    return [false, 'invalid characters'];
+  }
+  if (name.includes('--')) {
+    return [false, 'double hyphens not allowed'];
+  }
+  return [true, ''];
 }
 
 async function getExistingBranches(): Promise<string[]> {
@@ -112,14 +121,21 @@ export async function generateBranchName(
   let lastAttempt = '';
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    let claudePrompt = `Generate a git branch name for the following task: ${prompt}
+    let claudePrompt = `Generate a git branch name for the following task:
+
+<task>
+\`\`\`markdown
+${prompt.replace(/```/g, '\\`\\`\\`')}
+\`\`\`
+</task>
 
 Requirements:
-- Output ONLY the branch name, nothing else
 - Lowercase letters, numbers, and hyphens only
 - No special characters, spaces, or underscores
 - Keep it concise (2-4 words max)
-- Example format: add-user-auth, fix-login-bug`;
+- Example format: add-user-auth, fix-login-bug
+
+CRITICAL: Output ONLY the branch name, nothing else`;
 
     if (allExistingNames.size > 0) {
       claudePrompt += `\n\nIMPORTANT: Do NOT use any of these names (they already exist):
@@ -140,13 +156,12 @@ ${[...allExistingNames].join(', ')}`;
     const branchName = result.trim().toLowerCase();
 
     // Clean up any quotes or extra whitespace
-    const cleaned = branchName.replace(/['"]/g, '').trim();
+    const cleaned = branchName.replace(/['"\n ]/g, '').trim();
 
-    if (!isValidBranchName(cleaned)) {
-      console.log(
-        `  Attempt ${attempt}: '${cleaned}' is not a valid branch name`,
-      );
-      lastAttempt = cleaned;
+    const [isValid, reason] = isValidBranchName(cleaned);
+    if (!isValid) {
+      console.log(`  Attempt ${attempt} is invalid (${reason})`);
+      lastAttempt = cleaned.slice(0, 100);
       continue;
     }
 
@@ -160,7 +175,12 @@ ${[...allExistingNames].join(', ')}`;
     return cleaned;
   }
 
-  throw new Error(
-    `Failed to generate valid branch name after ${maxRetries} attempts`,
-  );
+  console.log('  Failed to generate a valid branch name, using a random name.');
+  // Fallback: use a generic name with random suffix
+  let fallbackName: string;
+  do {
+    const randomSuffix = nanoid(12).toLowerCase();
+    fallbackName = `hermes-branch-${randomSuffix}`;
+  } while (allExistingNames.has(fallbackName));
+  return fallbackName;
 }
