@@ -1,10 +1,7 @@
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  type HermesSession,
-  listHermesSessions,
-} from '../services/docker';
+import { type HermesSession, listHermesSessions } from '../services/docker';
 import { Frame } from './Frame';
 import { Toast, type ToastType } from './Toast';
 
