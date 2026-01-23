@@ -20,6 +20,13 @@ const dockerfileHash = hasher.digest('hex').slice(0, 12);
 const DOCKER_IMAGE_NAME = 'hermes-sandbox';
 const DOCKER_IMAGE_TAG = `${DOCKER_IMAGE_NAME}:md5-${dockerfileHash}`;
 
+/**
+ * Get the Docker image tag for the current sandbox image
+ */
+export function getDockerImageTag(): string {
+  return DOCKER_IMAGE_TAG;
+}
+
 // GHCR (GitHub Container Registry) configuration
 const GHCR_REGISTRY = 'ghcr.io';
 const GHCR_IMAGE_NAME = 'ghcr.io/timescale/hermes/sandbox';
@@ -247,6 +254,27 @@ export async function ensureDockerImage(): Promise<void> {
 // ============================================================================
 
 export type { AgentType } from './config';
+
+// ============================================================================
+// Volume Mount Helpers
+// ============================================================================
+
+/**
+ * Get volume mount args for gh credentials if they exist in .hermes/gh/
+ * Returns array of docker args like ['-v', '/path:/container/path']
+ */
+async function getGhCredentialsMountArgs(): Promise<string[]> {
+  const ghConfigDir = join(process.cwd(), '.hermes', 'gh');
+  const ghHostsFile = Bun.file(join(ghConfigDir, 'hosts.yml'));
+  if (await ghHostsFile.exists()) {
+    return ['-v', `${ghConfigDir}:/home/agent/.config/gh`];
+  }
+  return [];
+}
+
+// ============================================================================
+// Container Options
+// ============================================================================
 
 export interface StartContainerOptions {
   branchName: string;
@@ -579,6 +607,9 @@ export async function resumeSession(
     envArgs.push('-e', envVar);
   }
 
+  // Mount gh credentials from .hermes/gh if they exist (for fresh auth)
+  const volumeArgs = await getGhCredentialsMountArgs();
+
   const baseName = container.Name.replace(/\//g, '').trim();
   const containerName = `${baseName}-resumed-${resumeSuffix}`;
 
@@ -634,6 +665,7 @@ exec ${agentCommand}
         --name ${containerName} \
         ${labelArgs} \
         ${envArgs} \
+        ${volumeArgs} \
         ${resumeImage} \
         bash -c ${resumeScript}`.quiet();
       return result.stdout.toString().trim();
@@ -648,6 +680,7 @@ exec ${agentCommand}
         containerName,
         ...labelArgs,
         ...envArgs,
+        ...volumeArgs,
         resumeImage,
         'bash',
         '-c',
@@ -783,6 +816,9 @@ export async function startContainer(
     // Mount the directory read-only to a temp location
     volumeArgs.push('-v', `${opencodeConfigDir}:/tmp/opencode-cfg:ro`);
   }
+
+  // Mount gh credentials from .hermes/gh if they exist
+  volumeArgs.push(...(await getGhCredentialsMountArgs()));
 
   // Build the agent command based on the selected agent type, model, and mode
   const modelArg = model ? ` --model ${model}` : '';

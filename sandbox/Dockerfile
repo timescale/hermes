@@ -167,7 +167,8 @@ ARG USER_GID=10000
 RUN groupadd --gid ${USER_GID} ${USER_NAME} \
   && useradd --uid ${USER_UID} --gid ${USER_GID} -m ${USER_NAME} \
   && mkdir -p /home/${USER_NAME}/.local/bin \
-  && mkdir -p /home/${USER_NAME}/.cache
+  && mkdir -p /home/${USER_NAME}/.cache \
+  && mkdir -p /home/${USER_NAME}/.config/gh
 
 # Copy tools installed in root's home to agent's home
 RUN cp -r /root/.bun /home/${USER_NAME}/.bun \
