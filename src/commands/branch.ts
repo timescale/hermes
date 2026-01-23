@@ -19,7 +19,7 @@ interface BranchOptions {
   dbFork: boolean;
   agent?: AgentType;
   model?: string;
-  detach: boolean;
+  print: boolean;
   interactive: boolean;
 }
 
@@ -51,8 +51,8 @@ export async function branchAction(
   options: BranchOptions,
 ): Promise<void> {
   // Validate mutually exclusive options
-  if (options.detach && options.interactive) {
-    console.error('Error: --detach and --interactive are mutually exclusive');
+  if (options.print && options.interactive) {
+    console.error('Error: --print and --interactive are mutually exclusive');
     process.exit(1);
   }
 
@@ -112,18 +112,21 @@ export async function branchAction(
   console.log(
     `Starting agent container (using ${effectiveAgent}${effectiveModel ? ` with ${effectiveModel}` : ''})...`,
   );
+  // Default to detached mode unless --print or --interactive is specified
+  const detach = !options.print && !options.interactive;
+
   const containerId = await startContainer({
     branchName,
     prompt,
     repoInfo,
     agent: effectiveAgent,
     model: effectiveModel,
-    detach: options.detach,
+    detach,
     interactive: options.interactive,
     envVars: forkResult?.envVars,
   });
 
-  if (options.detach) {
+  if (detach) {
     console.log(`  Container started: ${containerId?.substring(0, 12)}`);
     // Summary only shown in detached mode
     printSummary(branchName, repoInfo, forkResult);
@@ -151,7 +154,10 @@ export function withBranchOptions<T extends Command>(cmd: T): T {
       '-m, --model <model>',
       'Model to use for the agent (defaults to config)',
     )
-    .option('-d, --detach', 'Run container in background (detached mode)')
+    .option(
+      '-p, --print',
+      'Attach container output to console (default: detached)',
+    )
     .option('-i, --interactive', 'Run agent in full TUI mode') as T;
 }
 
