@@ -25,6 +25,15 @@ withBranchOptions(program)
   .action(async (prompt, options) => {
     // Only run if prompt is provided (otherwise show help)
     if (prompt) {
+      // Guard against accidentally running with an invalid command as prompt
+      // Prompt must contain at least one space (more than one word)
+      if (!prompt.includes(' ')) {
+        console.error(
+          `Error: Prompt must be more than one word. Did you mean to run a command?\n`,
+        );
+        program.help();
+        return;
+      }
       await branchAction(prompt, options);
     } else {
       program.help();
