@@ -25,6 +25,7 @@ import {
   writeConfig,
 } from '../services/config';
 import { listServices, type TigerService } from '../services/tiger';
+import { restoreConsole } from '../utils';
 
 // ============================================================================
 // Types
@@ -401,38 +402,33 @@ async function initAction(): Promise<void> {
 
   await renderer.idle();
   renderer.destroy();
-
-  // Use process.stdout/stderr.write directly to bypass the library's
-  // console capture (which has a bug in restoreOriginalConsole that
-  // re-captures immediately after restoring)
-  const print = (msg: string) => process.stdout.write(`${msg}\n`);
-  const printErr = (msg: string) => process.stderr.write(`${msg}\n`);
+  restoreConsole();
 
   if (result.type === 'cancelled') {
-    print('\nCancelled. No changes made.');
+    console.log('\nCancelled. No changes made.');
     return;
   }
 
   if (result.type === 'error') {
-    printErr(`\nError: ${result.message}`);
+    console.error(`\nError: ${result.message}`);
     process.exit(1);
   }
 
   const config = result.config;
   await writeConfig(config);
 
-  print('\nConfiguration saved to .hermes/config.yml');
-  print('\nSummary:');
+  console.log('\nConfiguration saved to .hermes/config.yml');
+  console.log('\nSummary:');
 
   if (config.tigerServiceId === null) {
-    print('  Database: (None) - forks will be skipped by default');
+    console.log('  Database: (None) - forks will be skipped by default');
   } else if (config.tigerServiceId) {
-    print(`  Database: ${config.tigerServiceId}`);
+    console.log(`  Database: ${config.tigerServiceId}`);
   }
 
-  print(`  Agent: ${config.agent}`);
+  console.log(`  Agent: ${config.agent}`);
   if (config.model) {
-    print(`  Model: ${config.model}`);
+    console.log(`  Model: ${config.model}`);
   }
 }
 

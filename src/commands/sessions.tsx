@@ -15,6 +15,7 @@ import {
   removeContainer,
   resumeSession,
 } from '../services/docker';
+import { restoreConsole } from '../utils';
 
 // ============================================================================
 // TUI Components
@@ -92,6 +93,7 @@ async function runSessionsTui(): Promise<void> {
 
   await renderer.idle();
   renderer.destroy();
+  restoreConsole();
 
   // Handle attach action - needs to happen after TUI cleanup
   if (result.type === 'attach' && result.containerId) {

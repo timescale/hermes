@@ -4,6 +4,7 @@
 
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
+import { restoreConsole } from '../utils';
 import { DockerSetup, type DockerSetupResult } from './DockerSetup';
 
 /**
@@ -33,6 +34,7 @@ export async function runDockerSetupScreen(): Promise<DockerSetupResult> {
 
   await renderer.idle();
   renderer.destroy();
+  restoreConsole();
 
   return result;
 }

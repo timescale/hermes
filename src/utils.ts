@@ -2,6 +2,42 @@
 // Shared CLI Utilities
 // ============================================================================
 
+// ============================================================================
+// Console Output Utilities
+// ============================================================================
+
+// Store original console methods before any TUI library can capture them
+const originalConsole = global.console;
+
+/**
+ * Restore console.log/error/warn to their original implementations.
+ * This works around a bug in @opentui where console methods are captured
+ * by the TUI renderer and not properly restored after the renderer is destroyed.
+ */
+export function restoreConsole(): void {
+  global.console = originalConsole;
+}
+
+/**
+ * Print to stdout, bypassing any console capture.
+ * Use this when you need guaranteed output after a TUI has been rendered.
+ */
+export function print(msg: string): void {
+  process.stdout.write(`${msg}\n`);
+}
+
+/**
+ * Print to stderr, bypassing any console capture.
+ * Use this when you need guaranteed error output after a TUI has been rendered.
+ */
+export function printErr(msg: string): void {
+  process.stderr.write(`${msg}\n`);
+}
+
+// ============================================================================
+// Shell Utilities
+// ============================================================================
+
 export interface ShellError extends Error {
   exitCode: number;
   stdout: Buffer;

@@ -5,6 +5,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { nanoid } from 'nanoid';
+import packageJson from '../../package.json' with { type: 'json' };
 // Import the Dockerfile as text - Bun's bundler embeds this in the binary
 import SANDBOX_DOCKERFILE from '../../sandbox/Dockerfile' with { type: 'text' };
 import { formatShellError, type ShellError } from '../utils';
@@ -18,6 +19,13 @@ const dockerfileHash = hasher.digest('hex').slice(0, 12);
 
 const DOCKER_IMAGE_NAME = 'hermes-sandbox';
 const DOCKER_IMAGE_TAG = `${DOCKER_IMAGE_NAME}:md5-${dockerfileHash}`;
+
+// GHCR (GitHub Container Registry) configuration
+const GHCR_REGISTRY = 'ghcr.io';
+const GHCR_IMAGE_NAME = 'ghcr.io/timescale/hermes/sandbox';
+const GHCR_IMAGE_TAG_LATEST = `${GHCR_IMAGE_NAME}:latest`;
+// Version tag from package.json
+const GHCR_IMAGE_TAG_VERSION = `${GHCR_IMAGE_NAME}:${packageJson.version}`;
 
 // ============================================================================
 // Docker Image Management
@@ -34,11 +42,171 @@ async function dockerImageExists(): Promise<boolean> {
 
 async function buildDockerImage(): Promise<void> {
   // Use Bun.spawn to pipe the Dockerfile content to docker build
-  const proc = Bun.spawn(['docker', 'build', '-t', DOCKER_IMAGE_TAG, '-'], {
-    stdin: Buffer.from(SANDBOX_DOCKERFILE),
-    stdout: 'inherit',
-    stderr: 'inherit',
+  const proc = Bun.spawn(
+    ['docker', 'build', '-q', '-t', DOCKER_IMAGE_TAG, '-'],
+    {
+      stdin: Buffer.from(SANDBOX_DOCKERFILE),
+      stdout: 'ignore',
+      stderr: 'ignore',
+    },
+  );
+
+  const exitCode = await proc.exited;
+
+  if (exitCode !== 0) {
+    throw new Error(`Docker build failed with exit code ${exitCode}`);
+  }
+}
+
+// ============================================================================
+// GHCR (GitHub Container Registry) Authentication
+// ============================================================================
+
+const GHCR_LOGIN_INSTRUCTIONS = `Log in to ghcr.io with a GitHub token
+
+Go to https://github.com/settings/tokens/new?scopes=read:packages&description=hermes-ghcr
+Generate a new token with:
+  - read:packages
+
+Use your GitHub username, and the token generated above as your password:`;
+
+/**
+ * Check if we have stored credentials for ghcr.io
+ */
+async function hasGhcrCredentials(): Promise<boolean> {
+  const configFile = join(homedir(), '.docker', 'config.json');
+  try {
+    const file = Bun.file(configFile);
+    if (!(await file.exists())) {
+      return false;
+    }
+    const config = await file.json();
+    return !!config?.auths?.[GHCR_REGISTRY];
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensure docker is logged in to ghcr.io
+ * Prompts the user for credentials if not already logged in
+ */
+async function ensureGhcrDockerLogin(): Promise<void> {
+  if (await hasGhcrCredentials()) {
+    return;
+  }
+
+  console.log(GHCR_LOGIN_INSTRUCTIONS);
+  const proc = Bun.spawn(['docker', 'login', GHCR_REGISTRY], {
+    stdio: ['inherit', 'inherit', 'inherit'],
   });
+  await proc.exited;
+}
+
+const MAX_GHCR_LOGIN_ATTEMPTS = 3;
+
+/**
+ * Try to pull a specific image tag
+ * Returns true if successful, false otherwise
+ */
+async function tryPullImage(imageTag: string): Promise<boolean> {
+  try {
+    await Bun.$`docker pull ${imageTag}`.quiet();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ensure ghcr.io docker login is valid by attempting a pull
+ * If credentials are invalid/expired, prompts user to re-authenticate
+ * Throws after MAX_GHCR_LOGIN_ATTEMPTS failed attempts
+ */
+async function ensureGhcrDockerLoginValid(): Promise<void> {
+  for (let attempt = 1; attempt <= MAX_GHCR_LOGIN_ATTEMPTS; attempt++) {
+    await ensureGhcrDockerLogin();
+
+    // Try to pull the latest image to verify credentials
+    if (await tryPullImage(GHCR_IMAGE_TAG_LATEST)) {
+      return; // Success
+    }
+
+    if (attempt < MAX_GHCR_LOGIN_ATTEMPTS) {
+      console.log(
+        `Failed to pull docker image from ghcr.io (attempt ${attempt}/${MAX_GHCR_LOGIN_ATTEMPTS}), GitHub credentials likely invalid (expired). Resetting...`,
+      );
+      // Logout and try again
+      try {
+        await Bun.$`docker logout ${GHCR_REGISTRY}`.quiet();
+      } catch {
+        // Ignore logout errors
+      }
+    }
+  }
+
+  throw new Error(
+    `Failed to authenticate with ghcr.io after ${MAX_GHCR_LOGIN_ATTEMPTS} attempts`,
+  );
+}
+
+/**
+ * Pull GHCR image for use as build cache
+ * Tries version-tagged image first, falls back to latest
+ * Returns the image tag that was successfully pulled, or null if all pulls failed
+ */
+async function pullGhcrImageForCache(): Promise<string | null> {
+  try {
+    await ensureGhcrDockerLoginValid();
+  } catch {
+    console.log(
+      '  Warning: Could not authenticate with ghcr.io, will build from scratch',
+    );
+    return null;
+  }
+
+  // Try version-tagged image first (closer cache match)
+  console.log(`  Trying version-tagged image: ${GHCR_IMAGE_TAG_VERSION}`);
+  if (await tryPullImage(GHCR_IMAGE_TAG_VERSION)) {
+    return GHCR_IMAGE_TAG_VERSION;
+  }
+  console.log('  Version-tagged image not found, falling back to latest...');
+
+  // Fall back to latest
+  console.log(`  Pulling latest image: ${GHCR_IMAGE_TAG_LATEST}`);
+  if (await tryPullImage(GHCR_IMAGE_TAG_LATEST)) {
+    return GHCR_IMAGE_TAG_LATEST;
+  }
+
+  console.log(
+    '  Warning: Could not pull GHCR image for cache, will build from scratch',
+  );
+  return null;
+}
+
+/**
+ * Build docker image using a pulled image as cache
+ */
+async function buildDockerImageWithCache(
+  cacheFromImage: string,
+): Promise<void> {
+  const proc = Bun.spawn(
+    [
+      'docker',
+      'build',
+      '-q',
+      '--cache-from',
+      cacheFromImage,
+      '-t',
+      DOCKER_IMAGE_TAG,
+      '-',
+    ],
+    {
+      stdin: Buffer.from(SANDBOX_DOCKERFILE),
+      stdout: 'ignore',
+      stderr: 'ignore',
+    },
+  );
 
   const exitCode = await proc.exited;
 
@@ -49,13 +217,28 @@ async function buildDockerImage(): Promise<void> {
 
 export async function ensureDockerImage(): Promise<void> {
   if (await dockerImageExists()) {
+    console.log(
+      `Docker image ${DOCKER_IMAGE_TAG} already exists, skipping build`,
+    );
     return;
   }
 
   console.log(
     `Building Docker image ${DOCKER_IMAGE_TAG} (this may take a while)...`,
   );
-  await buildDockerImage();
+
+  // Try to pull the GHCR image first for caching
+  console.log('  Pulling image from GHCR for cache...');
+  const cacheImage = await pullGhcrImageForCache();
+
+  if (cacheImage) {
+    console.log(`  Building with cache from ${cacheImage}...`);
+    await buildDockerImageWithCache(cacheImage);
+  } else {
+    console.log('  Building from scratch...');
+    await buildDockerImage();
+  }
+
   console.log('  Docker image built successfully');
 }
 
@@ -666,7 +849,7 @@ HERMES_PROMPT_HEREDOC
         ${envArgs} \
         ${volumeArgs} \
         ${DOCKER_IMAGE_TAG} \
-        bash -c ${startupScript}`;
+        bash -c ${startupScript}`.quiet();
       return result.stdout.toString().trim();
     }
 
