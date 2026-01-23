@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - "Dockerfile"
+      - "sandbox/Dockerfile"
 
 permissions:
   packages: write
@@ -32,7 +32,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./sandbox
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/timescale/hermes/sandbox:latest
