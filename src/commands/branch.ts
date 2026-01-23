@@ -13,7 +13,7 @@ import {
   type RepoInfo,
 } from '../services/git';
 import { ensureGitignore } from '../utils';
-import { initAction } from './init';
+import { configAction } from './config';
 
 interface BranchOptions {
   serviceId?: string;
@@ -70,18 +70,18 @@ export async function branchAction(
   // Step 3: Ensure .gitignore has .hermes/ entry
   await ensureGitignore();
 
-  // Step 4: Read config for defaults, run init if no config exists
+  // Step 4: Read config for defaults, run config wizard if no config exists
   let config = await readConfig();
   if (!config) {
-    console.log('No config found. Running init wizard...\n');
-    await initAction();
-    // Re-read config after init
+    console.log('No config found. Running config wizard...\n');
+    await configAction();
+    // Re-read config after config wizard
     config = await readConfig();
     if (!config) {
-      console.error('Init was cancelled or failed. Cannot continue.');
+      console.error('Config was cancelled or failed. Cannot continue.');
       process.exit(1);
     }
-    console.log(''); // blank line after init
+    console.log(''); // blank line after config
   }
 
   // Step 5: Determine effective values from options or config

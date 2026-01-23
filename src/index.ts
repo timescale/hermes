@@ -8,7 +8,7 @@ import {
   branchCommand,
   withBranchOptions,
 } from './commands/branch';
-import { initCommand } from './commands/init';
+import { configCommand } from './commands/config';
 import { resumeCommand } from './commands/resume';
 import { sessionsCommand } from './commands/sessions';
 
@@ -33,7 +33,7 @@ withBranchOptions(program)
 
 // Add subcommands (after root options so they take precedence)
 program.addCommand(branchCommand);
-program.addCommand(initCommand);
+program.addCommand(configCommand);
 program.addCommand(resumeCommand);
 program.addCommand(sessionsCommand);
 

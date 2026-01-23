@@ -509,7 +509,7 @@ function App({ onComplete }: AppProps) {
 // Main Init Action
 // ============================================================================
 
-export async function initAction(): Promise<void> {
+export async function configAction(): Promise<void> {
   let resolveWizard: (result: WizardResult) => void;
   const wizardPromise = new Promise<WizardResult>((resolve) => {
     resolveWizard = resolve;
@@ -559,9 +559,9 @@ export async function initAction(): Promise<void> {
 
   console.log('  GitHub: authenticated');
 
-  console.log('\nInit complete! Run `hermes branch "<task>"` to start.');
+  console.log('\nConfiguration complete! Run `hermes "<task>"` to start.');
 }
 
-export const initCommand = new Command('init')
+export const configCommand = new Command('config')
   .description('Configure hermes for this project')
-  .action(initAction);
+  .action(configAction);
