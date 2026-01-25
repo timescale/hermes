@@ -12,10 +12,11 @@ import { GhAuth } from '../components/GhAuth';
 import { Loading } from '../components/Loading';
 import { Selector } from '../components/Selector';
 import {
-  AGENTS,
+  AGENT_SELECT_OPTIONS,
   getModelsForAgent,
   installOpencode,
   isOpencodeInstalled,
+  type Model,
 } from '../services/agents';
 import {
   type GhAuthProcess,
@@ -36,26 +37,20 @@ import { ensureGitignore, restoreConsole } from '../utils';
 // Types
 // ============================================================================
 
-type WizardResult =
+export type ConfigWizardResult =
   | { type: 'completed'; config: HermesConfig }
   | { type: 'cancelled' }
   | { type: 'error'; message: string };
-
-interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-}
 
 // ============================================================================
 // App Component
 // ============================================================================
 
-interface AppProps {
-  onComplete: (result: WizardResult) => void;
+export interface ConfigWizardProps {
+  onComplete: (result: ConfigWizardResult) => void;
 }
 
-function App({ onComplete }: AppProps) {
+export function ConfigWizard({ onComplete }: ConfigWizardProps) {
   // Create all promises immediately (only once via useMemo)
   const configPromise = useMemo(() => readConfig(), []);
   const servicesPromise = useMemo(() => listServices(), []);
@@ -85,13 +80,11 @@ function App({ onComplete }: AppProps) {
 
   // Async data - null means still loading
   const [services, setServices] = useState<TigerService[] | null>(null);
-  const [claudeModels, setClaudeModels] = useState<ModelOption[] | null>(null);
+  const [claudeModels, setClaudeModels] = useState<Model[] | null>(null);
   const [opencodeInstalled, setOpencodeInstalled] = useState<boolean | null>(
     null,
   );
-  const [opencodeModels, setOpencodeModels] = useState<ModelOption[] | null>(
-    null,
-  );
+  const [opencodeModels, setOpencodeModels] = useState<Model[] | null>(null);
   const [isInstalling, setIsInstalling] = useState(false);
 
   // GitHub auth state
@@ -292,21 +285,15 @@ function App({ onComplete }: AppProps) {
       return <Loading title="Loading" onCancel={handleCancel} />;
     }
 
-    const agentOptions: SelectOption[] = AGENTS.map((agent) => ({
-      name: agent.name,
-      description: agent.description,
-      value: agent.id,
-    }));
-
     const initialIndex = config?.agent
-      ? agentOptions.findIndex((opt) => opt.value === config.agent)
+      ? AGENT_SELECT_OPTIONS.findIndex((opt) => opt.value === config.agent)
       : 0;
 
     return (
       <Selector
         title="Step 3/5: Default Agent"
         description="Select the default coding agent to use."
-        options={agentOptions}
+        options={AGENT_SELECT_OPTIONS}
         initialIndex={initialIndex >= 0 ? initialIndex : 0}
         showBack
         onSelect={(value) => {
@@ -421,13 +408,11 @@ function App({ onComplete }: AppProps) {
       return <Loading title="Loading models" onCancel={handleCancel} />;
     }
 
-    const modelOptions: SelectOption[] = currentModels.map(
-      (model: ModelOption) => ({
-        name: model.name,
-        description: model.description,
-        value: model.id,
-      }),
-    );
+    const modelOptions: SelectOption[] = currentModels.map((model: Model) => ({
+      name: model.name,
+      description: model.description || '',
+      value: model.id,
+    }));
 
     const initialIndex = config?.model
       ? modelOptions.findIndex((opt) => opt.value === config.model)
@@ -510,15 +495,15 @@ function App({ onComplete }: AppProps) {
 // ============================================================================
 
 export async function configAction(): Promise<void> {
-  let resolveWizard: (result: WizardResult) => void;
-  const wizardPromise = new Promise<WizardResult>((resolve) => {
+  let resolveWizard: (result: ConfigWizardResult) => void;
+  const wizardPromise = new Promise<ConfigWizardResult>((resolve) => {
     resolveWizard = resolve;
   });
 
   const renderer = await createCliRenderer({ exitOnCtrlC: true });
   const root = createRoot(renderer);
 
-  root.render(<App onComplete={(result) => resolveWizard(result)} />);
+  root.render(<ConfigWizard onComplete={(result) => resolveWizard(result)} />);
 
   const result = await wizardPromise;
 

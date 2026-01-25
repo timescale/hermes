@@ -1,41 +1,363 @@
 // ============================================================================
-// Sessions Command - Shows all hermes sessions and their status
+// Sessions Command - Unified TUI for hermes
 // ============================================================================
 
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
 import { Command } from 'commander';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ConfigWizard, type ConfigWizardResult } from '../commands/config.tsx';
+import { DockerSetup, type DockerSetupResult } from '../components/DockerSetup';
+import { PromptScreen } from '../components/PromptScreen';
 import { SessionDetail } from '../components/SessionDetail';
 import { SessionsList } from '../components/SessionsList';
+import { StartingScreen } from '../components/StartingScreen';
+import { Toast, type ToastType } from '../components/Toast';
+import {
+  type AgentType,
+  type HermesConfig,
+  readConfig,
+  writeConfig,
+} from '../services/config';
+import { type ForkResult, forkDatabase } from '../services/db';
 import {
   attachToContainer,
+  ensureDockerImage,
+  getSession,
   type HermesSession,
   listHermesSessions,
   removeContainer,
   resumeSession,
+  startContainer,
 } from '../services/docker';
-import { restoreConsole } from '../utils';
+import { dockerIsRunning } from '../services/dockerSetup';
+import { generateBranchName, getRepoInfo } from '../services/git';
+import { ensureGitignore, restoreConsole } from '../utils';
 
 // ============================================================================
-// TUI Components
+// Types
 // ============================================================================
 
 type SessionsView =
-  | { type: 'list' }
-  | { type: 'detail'; session: HermesSession };
+  | { type: 'init' } // Initial loading state
+  | { type: 'docker' }
+  | { type: 'config' }
+  | { type: 'prompt' }
+  | {
+      type: 'starting';
+      prompt: string;
+      agent: AgentType;
+      model: string;
+      step: string;
+    }
+  | { type: 'detail'; session: HermesSession }
+  | { type: 'list' };
 
 interface SessionsResult {
   type: 'quit' | 'attach' | 'resume';
   containerId?: string;
 }
 
+interface ToastState {
+  message: string;
+  type: ToastType;
+}
+
+export interface RunSessionsTuiOptions {
+  initialView?: 'prompt' | 'list' | 'starting';
+  initialPrompt?: string;
+  initialAgent?: AgentType;
+  initialModel?: string;
+  // Options for starting flow
+  serviceId?: string;
+  dbFork?: boolean;
+}
+
+// ============================================================================
+// Unified Sessions App
+// ============================================================================
+
 interface SessionsAppProps {
+  initialView: 'prompt' | 'list' | 'starting';
+  initialPrompt?: string;
+  initialAgent?: AgentType;
+  initialModel?: string;
+  serviceId?: string;
+  dbFork?: boolean;
   onComplete: (result: SessionsResult) => void;
 }
 
-function SessionsApp({ onComplete }: SessionsAppProps) {
-  const [view, setView] = useState<SessionsView>({ type: 'list' });
+function SessionsApp({
+  initialView,
+  initialPrompt,
+  initialAgent,
+  initialModel,
+  serviceId,
+  dbFork = true,
+  onComplete,
+}: SessionsAppProps) {
+  const [view, setViewRaw] = useState<SessionsView>({ type: 'init' });
+  const [config, setConfig] = useState<HermesConfig | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+
+  // Wrapper to debug view changes
+  const setView = useCallback(
+    (newView: SessionsView | ((prev: SessionsView) => SessionsView)) => {
+      setViewRaw((prev) => {
+        const next = typeof newView === 'function' ? newView(prev) : newView;
+        // Uncomment for debugging:
+        // console.log(`View: ${prev.type} -> ${next.type}`);
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Use refs to store props/config that we need in async functions
+  // This avoids dependency issues with useCallback/useEffect
+  const configRef = useRef<HermesConfig | null>(null);
+  const propsRef = useRef({
+    initialView,
+    initialPrompt,
+    initialAgent,
+    initialModel,
+    serviceId,
+    dbFork,
+  });
+
+  // Keep refs up to date
+  configRef.current = config;
+  propsRef.current = {
+    initialView,
+    initialPrompt,
+    initialAgent,
+    initialModel,
+    serviceId,
+    dbFork,
+  };
+
+  const showToast = useCallback((message: string, type: ToastType) => {
+    setToast({ message, type });
+  }, []);
+
+  // Start session function - handles the full flow of starting an agent
+  const startSession = useCallback(
+    async (prompt: string, agent: AgentType, model: string) => {
+      setView({
+        type: 'starting',
+        prompt,
+        agent,
+        model,
+        step: 'Getting repository info',
+      });
+
+      try {
+        // Step 1: Get repo info
+        const repoInfo = await getRepoInfo();
+
+        // Step 2: Generate branch name
+        setView((v) =>
+          v.type === 'starting' ? { ...v, step: 'Generating branch name' } : v,
+        );
+        const branchName = await generateBranchName(prompt);
+
+        // Step 3: Ensure .gitignore has .hermes/ entry
+        await ensureGitignore();
+
+        // Step 4: Fork database if configured
+        const { serviceId: svcId, dbFork: doFork } = propsRef.current;
+        const effectiveServiceId = svcId ?? configRef.current?.tigerServiceId;
+        let forkResult: ForkResult | null = null;
+
+        if (doFork && effectiveServiceId) {
+          setView((v) =>
+            v.type === 'starting' ? { ...v, step: 'Forking database' } : v,
+          );
+          forkResult = await forkDatabase(branchName, effectiveServiceId);
+        }
+
+        // Step 5: Ensure Docker image exists
+        setView((v) =>
+          v.type === 'starting' ? { ...v, step: 'Preparing Docker image' } : v,
+        );
+        await ensureDockerImage();
+
+        // Step 6: Start container (always detached in TUI mode)
+        setView((v) =>
+          v.type === 'starting'
+            ? { ...v, step: 'Starting agent container' }
+            : v,
+        );
+        await startContainer({
+          branchName,
+          prompt,
+          repoInfo,
+          agent,
+          model,
+          detach: true,
+          interactive: false,
+          envVars: forkResult?.envVars,
+        });
+
+        // Step 7: Fetch the created session
+        setView((v) =>
+          v.type === 'starting' ? { ...v, step: 'Loading session' } : v,
+        );
+        const session = await getSession(`hermes-${branchName}`);
+
+        if (session) {
+          setView({ type: 'detail', session });
+        } else {
+          throw new Error('Failed to find created session');
+        }
+      } catch (err) {
+        showToast(
+          `Failed to start: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
+        setView({ type: 'prompt' });
+      }
+    },
+    [showToast, setView],
+  );
+
+  // Initialize: check docker, then config, then go to target view
+  // Only runs once on mount - we use refs to access current values without triggering re-runs
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only runs on mount
+  useEffect(() => {
+    let cancelled = false;
+
+    async function init() {
+      // Step 1: Check if Docker is running
+      const isDockerReady = await dockerIsRunning();
+      if (cancelled) return;
+
+      if (!isDockerReady) {
+        setView({ type: 'docker' });
+        return;
+      }
+
+      // Step 2: Check if config exists
+      const existingConfig = await readConfig();
+      if (cancelled) return;
+
+      if (!existingConfig) {
+        setView({ type: 'config' });
+        return;
+      }
+
+      setConfig(existingConfig);
+
+      // Step 3: Go to target view based on props at mount time
+      const {
+        initialView: targetView,
+        initialPrompt: prompt,
+        initialAgent,
+        initialModel,
+      } = propsRef.current;
+
+      if (targetView === 'starting' && prompt) {
+        const agent = initialAgent ?? existingConfig.agent ?? 'opencode';
+        const model = initialModel ?? existingConfig.model ?? '';
+        startSession(prompt, agent, model);
+      } else if (targetView === 'prompt') {
+        setView({ type: 'prompt' });
+      } else {
+        setView({ type: 'list' });
+      }
+    }
+
+    init();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Handle docker setup completion
+  const handleDockerComplete = useCallback(
+    async (result: DockerSetupResult) => {
+      if (result.type === 'cancelled') {
+        onComplete({ type: 'quit' });
+        return;
+      }
+      if (result.type === 'error') {
+        showToast(result.error ?? 'Docker setup failed', 'error');
+        onComplete({ type: 'quit' });
+        return;
+      }
+
+      // Docker is ready, now check config
+      const existingConfig = await readConfig();
+      if (!existingConfig) {
+        setView({ type: 'config' });
+        return;
+      }
+
+      setConfig(existingConfig);
+
+      // Go to target view
+      const {
+        initialView: targetView,
+        initialPrompt: prompt,
+        initialAgent,
+        initialModel,
+      } = propsRef.current;
+
+      if (targetView === 'starting' && prompt) {
+        const agent = initialAgent ?? existingConfig.agent ?? 'opencode';
+        const model = initialModel ?? existingConfig.model ?? '';
+        startSession(prompt, agent, model);
+      } else if (targetView === 'prompt') {
+        setView({ type: 'prompt' });
+      } else {
+        setView({ type: 'list' });
+      }
+    },
+    [onComplete, showToast, startSession, setView],
+  );
+
+  // Handle config wizard completion
+  const handleConfigComplete = useCallback(
+    async (result: ConfigWizardResult) => {
+      if (result.type === 'cancelled') {
+        onComplete({ type: 'quit' });
+        return;
+      }
+      if (result.type === 'error') {
+        showToast(result.message, 'error');
+        onComplete({ type: 'quit' });
+        return;
+      }
+
+      // Save config
+      await ensureGitignore();
+      await writeConfig(result.config);
+      setConfig(result.config);
+
+      // Go to target view
+      const {
+        initialView: targetView,
+        initialPrompt: prompt,
+        initialAgent,
+        initialModel,
+      } = propsRef.current;
+
+      if (targetView === 'starting' && prompt) {
+        const agent = initialAgent ?? result.config.agent ?? 'opencode';
+        const model = initialModel ?? result.config.model ?? '';
+        startSession(prompt, agent, model);
+      } else if (targetView === 'prompt') {
+        setView({ type: 'prompt' });
+      } else {
+        setView({ type: 'list' });
+      }
+    },
+    [onComplete, showToast, startSession, setView],
+  );
+
+  // Handle resume from session detail
   const handleResume = useCallback(
     async (
       containerId: string,
@@ -54,31 +376,160 @@ function SessionsApp({ onComplete }: SessionsAppProps) {
       await resumeSession(containerId, { mode: 'detached', prompt });
       setView({ type: 'list' });
     },
-    [onComplete],
+    [onComplete, setView],
   );
 
-  if (view.type === 'detail') {
+  // ---- Initial Loading View ----
+  if (view.type === 'init') {
     return (
-      <SessionDetail
-        session={view.session}
-        onBack={() => setView({ type: 'list' })}
-        onQuit={() => onComplete({ type: 'quit' })}
-        onAttach={(containerId) => onComplete({ type: 'attach', containerId })}
-        onResume={handleResume}
-        onSessionDeleted={() => setView({ type: 'list' })}
-      />
+      <>
+        <StartingScreen step="Initializing" />
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onDismiss={() => setToast(null)}
+          />
+        )}
+      </>
     );
   }
 
+  // ---- Docker Setup View ----
+  if (view.type === 'docker') {
+    return (
+      <>
+        <DockerSetup
+          title="Docker Setup"
+          onComplete={handleDockerComplete}
+          showBack={false}
+        />
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onDismiss={() => setToast(null)}
+          />
+        )}
+      </>
+    );
+  }
+
+  // ---- Config Wizard View ----
+  if (view.type === 'config') {
+    return (
+      <>
+        <ConfigWizard onComplete={handleConfigComplete} />
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onDismiss={() => setToast(null)}
+          />
+        )}
+      </>
+    );
+  }
+
+  // ---- Prompt Screen View ----
+  if (view.type === 'prompt') {
+    return (
+      <>
+        <PromptScreen
+          defaultAgent={config?.agent ?? 'opencode'}
+          defaultModel={config?.model}
+          onSubmit={({ prompt, agent, model }) => {
+            startSession(prompt, agent, model);
+          }}
+          onCancel={() => onComplete({ type: 'quit' })}
+        />
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onDismiss={() => setToast(null)}
+          />
+        )}
+      </>
+    );
+  }
+
+  // ---- Starting Screen View ----
+  if (view.type === 'starting') {
+    return (
+      <>
+        <StartingScreen step={view.step} />
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onDismiss={() => setToast(null)}
+          />
+        )}
+      </>
+    );
+  }
+
+  // ---- Session Detail View ----
+  if (view.type === 'detail') {
+    return (
+      <>
+        <SessionDetail
+          session={view.session}
+          onBack={() => setView({ type: 'list' })}
+          onQuit={() => onComplete({ type: 'quit' })}
+          onAttach={(containerId) =>
+            onComplete({ type: 'attach', containerId })
+          }
+          onResume={handleResume}
+          onSessionDeleted={() => setView({ type: 'list' })}
+        />
+        {toast && (
+          <Toast
+            message={toast.message}
+            type={toast.type}
+            onDismiss={() => setToast(null)}
+          />
+        )}
+      </>
+    );
+  }
+
+  // ---- Session List View ----
   return (
-    <SessionsList
-      onSelect={(session) => setView({ type: 'detail', session })}
-      onQuit={() => onComplete({ type: 'quit' })}
-    />
+    <>
+      <SessionsList
+        onSelect={(session) => setView({ type: 'detail', session })}
+        onQuit={() => onComplete({ type: 'quit' })}
+        onNewTask={() => setView({ type: 'prompt' })}
+      />
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onDismiss={() => setToast(null)}
+        />
+      )}
+    </>
   );
 }
 
-async function runSessionsTui(): Promise<void> {
+// ============================================================================
+// TUI Runner
+// ============================================================================
+
+export async function runSessionsTui(
+  options: RunSessionsTuiOptions = {},
+): Promise<void> {
+  const {
+    initialView = 'list',
+    initialPrompt,
+    initialAgent,
+    initialModel,
+    serviceId,
+    dbFork,
+  } = options;
+
   let resolveResult: (result: SessionsResult) => void;
   const resultPromise = new Promise<SessionsResult>((resolve) => {
     resolveResult = resolve;
@@ -87,7 +538,17 @@ async function runSessionsTui(): Promise<void> {
   const renderer = await createCliRenderer({ exitOnCtrlC: true });
   const root = createRoot(renderer);
 
-  root.render(<SessionsApp onComplete={(result) => resolveResult(result)} />);
+  root.render(
+    <SessionsApp
+      initialView={initialView}
+      initialPrompt={initialPrompt}
+      initialAgent={initialAgent}
+      initialModel={initialModel}
+      serviceId={serviceId}
+      dbFork={dbFork}
+      onComplete={(result) => resolveResult(result)}
+    />,
+  );
 
   const result = await resultPromise;
 
@@ -267,7 +728,7 @@ function toYaml(data: unknown, indent = 0): string {
 async function sessionsAction(options: SessionsOptions): Promise<void> {
   // TUI mode is default
   if (options.output === 'tui') {
-    await runSessionsTui();
+    await runSessionsTui({ initialView: 'list' });
     return;
   }
 

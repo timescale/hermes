@@ -10,6 +10,7 @@ export type FilterMode = 'all' | 'running' | 'completed';
 export interface SessionsListProps {
   onSelect: (session: HermesSession) => void;
   onQuit: () => void;
+  onNewTask?: () => void;
 }
 
 interface ToastState {
@@ -83,7 +84,11 @@ const FILTER_LABELS: Record<FilterMode, string> = {
 
 const FILTER_ORDER: FilterMode[] = ['all', 'running', 'completed'];
 
-export function SessionsList({ onSelect, onQuit }: SessionsListProps) {
+export function SessionsList({
+  onSelect,
+  onQuit,
+  onNewTask,
+}: SessionsListProps) {
   const [sessions, setSessions] = useState<HermesSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterText, setFilterText] = useState('');
@@ -205,6 +210,11 @@ export function SessionsList({ onSelect, onQuit }: SessionsListProps) {
       loadSessions().then(() => {
         setToast({ message: 'Refreshed', type: 'info' });
       });
+      return;
+    }
+
+    if (key.name === 'p' && key.ctrl && onNewTask) {
+      onNewTask();
       return;
     }
 
@@ -386,7 +396,9 @@ export function SessionsList({ onSelect, onQuit }: SessionsListProps) {
 
       {/* Help bar */}
       <text style={{ height: 1, fg: '#888888' }}>
-        [Enter] view [Tab] filter mode [ctrl+r] refresh [Esc] quit
+        {onNewTask
+          ? '[Enter] view [Tab] filter [ctrl+p] new [ctrl+r] refresh [Esc] quit'
+          : '[Enter] view [Tab] filter mode [ctrl+r] refresh [Esc] quit'}
       </text>
 
       {/* Toast notifications */}

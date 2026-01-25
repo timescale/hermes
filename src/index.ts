@@ -10,7 +10,7 @@ import {
 } from './commands/branch';
 import { configCommand } from './commands/config';
 import { resumeCommand } from './commands/resume';
-import { sessionsCommand } from './commands/sessions';
+import { runSessionsTui, sessionsCommand } from './commands/sessions';
 
 program
   .name('hermes')
@@ -23,7 +23,6 @@ program
 withBranchOptions(program)
   .argument('[prompt]', 'Natural language description of the task')
   .action(async (prompt, options) => {
-    // Only run if prompt is provided (otherwise show help)
     if (prompt) {
       // Guard against accidentally running with an invalid command as prompt
       // Prompt must contain at least one space (more than one word)
@@ -34,9 +33,25 @@ withBranchOptions(program)
         program.help();
         return;
       }
-      await branchAction(prompt, options);
+
+      // -p (print) or -i (interactive) flags: use non-TUI flow
+      if (options.print || options.interactive) {
+        await branchAction(prompt, options);
+        return;
+      }
+
+      // Default: use unified TUI starting at 'starting' view
+      await runSessionsTui({
+        initialView: 'starting',
+        initialPrompt: prompt,
+        initialAgent: options.agent,
+        initialModel: options.model,
+        serviceId: options.serviceId,
+        dbFork: options.dbFork,
+      });
     } else {
-      program.help();
+      // No prompt: launch interactive TUI starting at 'prompt' view
+      await runSessionsTui({ initialView: 'prompt' });
     }
   });
 

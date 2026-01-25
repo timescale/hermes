@@ -175,4 +175,21 @@ export const branchCommand = withBranchOptions(
       'Create a feature branch with isolated DB fork and start agent sandbox',
     )
     .argument('<prompt>', 'Natural language description of the task'),
-).action(branchAction);
+).action(async (prompt: string, options: BranchOptions) => {
+  // -p (print) or -i (interactive) flags: use non-TUI flow
+  if (options.print || options.interactive) {
+    await branchAction(prompt, options);
+    return;
+  }
+
+  // Default: use unified TUI
+  const { runSessionsTui } = await import('./sessions.tsx');
+  await runSessionsTui({
+    initialView: 'starting',
+    initialPrompt: prompt,
+    initialAgent: options.agent,
+    initialModel: options.model,
+    serviceId: options.serviceId,
+    dbFork: options.dbFork,
+  });
+});
