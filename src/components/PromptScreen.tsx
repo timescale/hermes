@@ -14,19 +14,11 @@ import {
 } from '../services/agents';
 import type { AgentType } from '../services/config';
 import { FilterableSelector } from './FilterableSelector';
+import { HermesTitle } from './HermesTitle';
 import { HotkeysBar } from './HotkeysBar';
 import { Modal } from './Modal';
 import { Selector } from './Selector';
 import { Toast, type ToastType } from './Toast';
-
-// ASCII art title for "hermes"
-const HERMES_TITLE = `
-██   ██ ███████ ██████  ███    ███ ███████ ███████
-██   ██ ██      ██   ██ ████  ████ ██      ██
-███████ █████   ██████  ██ ████ ██ █████   ███████
-██   ██ ██      ██   ██ ██  ██  ██ ██           ██
-██   ██ ███████ ██   ██ ██      ██ ███████ ███████
-`.trim();
 
 export interface PromptScreenProps {
   defaultAgent: AgentType;
@@ -186,9 +178,7 @@ export function PromptScreen({
       >
         <box width="100%" maxWidth={76} flexDirection="column">
           {/* ASCII Art Title */}
-          <box marginBottom={2} width="100%" alignItems="center">
-            <text fg="#888888">{HERMES_TITLE}</text>
-          </box>
+          <HermesTitle />
           {/* Main input box */}
           <box
             border={['left']}
