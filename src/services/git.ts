@@ -11,18 +11,13 @@ export interface RepoInfo {
   fullName: string; // owner/repo
 }
 
-export async function getRepoInfo(): Promise<RepoInfo> {
-  let remoteUrl: string;
-  try {
-    const result = await Bun.$`git remote get-url origin`.quiet();
-    remoteUrl = result.stdout.toString().trim();
-  } catch (err) {
-    throw formatShellError(err as ShellError);
-  }
-
-  // Parse GitHub URL (supports both HTTPS and SSH formats)
-  // https://github.com/owner/repo.git
-  // git@github.com:owner/repo.git
+/**
+ * Parse a GitHub remote URL into owner/repo components.
+ * Supports both HTTPS and SSH formats:
+ * - https://github.com/owner/repo.git
+ * - git@github.com:owner/repo.git
+ */
+export function parseGitHubUrl(remoteUrl: string): RepoInfo {
   let repoPath = remoteUrl;
   repoPath = repoPath.replace(/^https:\/\/github\.com\//, '');
   repoPath = repoPath.replace(/^git@github\.com:/, '');
@@ -42,16 +37,37 @@ export async function getRepoInfo(): Promise<RepoInfo> {
   };
 }
 
-function isValidBranchName(name: string): [boolean, string] {
+export async function getRepoInfo(): Promise<RepoInfo> {
+  let remoteUrl: string;
+  try {
+    const result = await Bun.$`git remote get-url origin`.quiet();
+    remoteUrl = result.stdout.toString().trim();
+  } catch (err) {
+    throw formatShellError(err as ShellError);
+  }
+
+  return parseGitHubUrl(remoteUrl);
+}
+
+export function isValidBranchName(name: string): [boolean, string] {
   // Must start with letter, contain only lowercase letters, numbers, hyphens
   // Must end with letter or number, max 50 chars
-  if (!name || name.length < 5) {
+  // Allow single lowercase letters as special case
+  if (!name) {
     return [false, 'too short'];
   }
   if (name.length > 50) {
     return [false, 'too long'];
   }
-  if (!/^[a-z][a-z0-9-]*[a-z0-9]$/.test(name) && !/^[a-z]$/.test(name)) {
+  // Single letter is valid
+  if (/^[a-z]$/.test(name)) {
+    return [true, ''];
+  }
+  // Multi-character names must be at least 5 chars
+  if (name.length < 5) {
+    return [false, 'too short'];
+  }
+  if (!/^[a-z][a-z0-9-]*[a-z0-9]$/.test(name)) {
     return [false, 'invalid characters'];
   }
   if (name.includes('--')) {
