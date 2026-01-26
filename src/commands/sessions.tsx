@@ -32,6 +32,7 @@ import {
 } from '../services/docker';
 import { dockerIsRunning } from '../services/dockerSetup';
 import { generateBranchName, getRepoInfo } from '../services/git';
+import { log } from '../services/logger';
 import { ensureGitignore, restoreConsole } from '../utils';
 
 // ============================================================================
@@ -143,6 +144,7 @@ function SessionsApp({
   // Start session function - handles the full flow of starting an agent
   const startSession = useCallback(
     async (prompt: string, agent: AgentType, model: string) => {
+      log.debug({ agent, model, prompt }, 'startSession received');
       setView({
         type: 'starting',
         prompt,

@@ -13,6 +13,7 @@ import {
   useAgentModels,
 } from '../services/agents';
 import type { AgentType } from '../services/config';
+import { log } from '../services/logger';
 import { FilterableSelector } from './FilterableSelector';
 import { HermesTitle } from './HermesTitle';
 import { HotkeysBar } from './HotkeysBar';
@@ -98,12 +99,14 @@ export function PromptScreen({
     setModelId(
       modelMem.current[newAgent] ||
         findEquivalentModel(modelId, modelsMap[newAgent]) ||
-        defaultModel,
+        modelsMap[newAgent]?.[0]?.id ||
+        null,
     );
   };
 
   // Handle model selection from modal
   const handleModelSelect = (selectedModel: string | null) => {
+    log.debug({ selectedModel, currentModelId: modelId }, 'Model selected');
     if (selectedModel) {
       setModelId(selectedModel);
     }
@@ -111,8 +114,9 @@ export function PromptScreen({
   };
 
   // Handle submit
-  const handleSubmit = () => {
+  const handleSubmitImpl = () => {
     const promptText = textareaRef.current?.plainText.trim() || '';
+
     if (!promptText) {
       setToast({ message: 'Please enter a prompt', type: 'error' });
       return;
@@ -125,8 +129,16 @@ export function PromptScreen({
       setToast({ message: 'Please select a model', type: 'error' });
       return;
     }
+    log.debug({ agent, model: modelId }, 'Submitting prompt');
     onSubmit({ prompt: promptText, agent, model: modelId });
   };
+
+  // Use a ref to avoid stale closure issues with @opentui/react's textarea.
+  // The textarea component caches the onSubmit handler, so we store the current
+  // implementation in a ref and use a stable wrapper that calls through the ref.
+  const handleSubmitRef = useRef(handleSubmitImpl);
+  handleSubmitRef.current = handleSubmitImpl;
+  const handleSubmit = () => handleSubmitRef.current();
 
   // Keyboard handling (when modal not shown)
   useKeyboard((key) => {
@@ -223,7 +235,7 @@ export function PromptScreen({
               <box flexDirection="row" marginTop={1} height={1} gap={1}>
                 <text fg={agentInfo?.color}>{agentInfo?.name || agent}</text>
                 <text fg="#aaaaaa">
-                  {model?.name || defaultModel || 'Loading...'}
+                  {model?.name || modelId || 'Loading...'}
                 </text>
                 {model?.description ? (
                   <text fg="#666666">{model.description}</text>
