@@ -52,20 +52,11 @@ export async function getRepoInfo(): Promise<RepoInfo> {
 export function isValidBranchName(name: string): [boolean, string] {
   // Must start with letter, contain only lowercase letters, numbers, hyphens
   // Must end with letter or number, max 50 chars
-  // Allow single lowercase letters as special case
-  if (!name) {
+  if (!name || name.length < 5) {
     return [false, 'too short'];
   }
   if (name.length > 50) {
     return [false, 'too long'];
-  }
-  // Single letter is valid
-  if (/^[a-z]$/.test(name)) {
-    return [true, ''];
-  }
-  // Multi-character names must be at least 5 chars
-  if (name.length < 5) {
-    return [false, 'too short'];
   }
   if (!/^[a-z][a-z0-9-]*[a-z0-9]$/.test(name)) {
     return [false, 'invalid characters'];

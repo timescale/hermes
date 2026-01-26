@@ -111,14 +111,14 @@ describe('isValidBranchName', () => {
     expect(reason).toBe('');
   });
 
-  test('accepts single letter branch name', () => {
-    const [valid, reason] = isValidBranchName('a');
-    expect(valid).toBe(true);
-    expect(reason).toBe('');
+  test('rejects branch name that is too short (< 5 chars)', () => {
+    const [valid, reason] = isValidBranchName('ab');
+    expect(valid).toBe(false);
+    expect(reason).toBe('too short');
   });
 
-  test('rejects branch name that is too short (< 5 chars, not single letter)', () => {
-    const [valid, reason] = isValidBranchName('ab');
+  test('rejects single letter branch name', () => {
+    const [valid, reason] = isValidBranchName('a');
     expect(valid).toBe(false);
     expect(reason).toBe('too short');
   });
