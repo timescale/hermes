@@ -2,6 +2,7 @@ import type { ScrollBoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type HermesSession, listHermesSessions } from '../services/docker';
+import { log } from '../services/logger';
 import { Frame } from './Frame';
 import { HotkeysBar } from './HotkeysBar';
 import { Toast, type ToastType } from './Toast';
@@ -129,6 +130,7 @@ export function SessionsList({
       setSessions(result);
       setLoading(false);
     } catch (err) {
+      log.error({ err }, 'Failed to load sessions');
       setToast({ message: `Failed to load sessions: ${err}`, type: 'error' });
       setLoading(false);
     }

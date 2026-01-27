@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { formatShellError, type ShellError } from '../utils';
+import { log } from './logger';
 
 export interface TigerService {
   service_id: string;
@@ -27,6 +28,7 @@ export async function listServices(): Promise<TigerService[]> {
     const result = await Bun.$`tiger svc list -o json`.quiet();
     return JSON.parse(result.stdout.toString());
   } catch (err) {
+    log.error({ err }, 'Failed to list Tiger services');
     // Check if tiger CLI is not installed
     const error = err as ShellError;
     if (error.exitCode === 127 || error.message?.includes('not found')) {

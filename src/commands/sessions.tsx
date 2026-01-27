@@ -260,6 +260,7 @@ function SessionsApp({
           throw new Error('Failed to find created session');
         }
       } catch (err) {
+        log.error({ err }, 'Failed to start session');
         showToast(
           `Failed to start: ${err instanceof Error ? err.message : String(err)}`,
           'error',
@@ -570,6 +571,7 @@ export async function runSessionsTui(
         mode: 'interactive',
       });
     } catch (err) {
+      log.error({ err }, 'Failed to resume session');
       console.error(`Failed to resume: ${err}`);
     }
   }
@@ -590,6 +592,7 @@ export async function runSessionsTui(
         envVars,
       });
     } catch (err) {
+      log.error({ err }, 'Failed to start session interactively');
       console.error(`Failed to start: ${err}`);
     }
   }
@@ -867,6 +870,7 @@ const cleanCommand = new Command('clean')
         await removeContainer(session.containerName);
         console.log(`Removed ${session.containerName}`);
       } catch (err) {
+        log.error({ err }, `Failed to remove ${session.containerName}`);
         console.error(`Failed to remove ${session.containerName}: ${err}`);
       }
     }

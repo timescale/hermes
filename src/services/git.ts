@@ -4,6 +4,7 @@
 
 import { nanoid } from 'nanoid';
 import { formatShellError, type ShellError } from '../utils';
+import { log } from './logger';
 
 export interface RepoInfo {
   owner: string;
@@ -43,6 +44,7 @@ export async function getRepoInfo(): Promise<RepoInfo> {
     const result = await Bun.$`git remote get-url origin`.quiet();
     remoteUrl = result.stdout.toString().trim();
   } catch (err) {
+    log.error({ err }, 'Failed to get git remote URL');
     throw formatShellError(err as ShellError);
   }
 
@@ -76,6 +78,7 @@ async function getExistingBranches(): Promise<string[]> {
       .map((line) => line.replace(/^\*?\s*/, '').trim())
       .filter(Boolean);
   } catch (err) {
+    log.error({ err }, 'Failed to get existing git branches');
     throw formatShellError(err as ShellError);
   }
 }
@@ -85,7 +88,8 @@ async function getExistingServices(): Promise<string[]> {
     const result = await Bun.$`tiger svc list -o json`.quiet();
     const services = JSON.parse(result.stdout.toString());
     return services.map((svc: { name: string }) => svc.name);
-  } catch {
+  } catch (err) {
+    log.error({ err }, 'Failed to get existing services');
     // tiger CLI not available or no services, return empty array
     return [];
   }
@@ -101,7 +105,8 @@ async function getExistingContainers(): Promise<string[]> {
       .map((name) => name.trim())
       .filter(Boolean)
       .map((name) => name.replace(/^hermes-/, '')); // Normalize to branch name format
-  } catch {
+  } catch (error) {
+    log.error({ error }, 'Failed to get existing Docker containers');
     // Docker not available, return empty array
     return [];
   }
@@ -158,6 +163,7 @@ ${[...allExistingNames].join(', ')}`;
       const proc = await Bun.$`claude --model haiku -p ${claudePrompt}`.quiet();
       result = proc.stdout.toString();
     } catch (err) {
+      log.error({ err }, 'Failed to generate branch name with Claude');
       throw formatShellError(err as ShellError);
     }
     const branchName = result.trim().toLowerCase();

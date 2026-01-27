@@ -10,6 +10,7 @@ import {
   ensureOrbStackRunning,
   isMac,
 } from 'build-strap';
+import { log } from './logger';
 
 // ============================================================================
 // Types
@@ -84,6 +85,7 @@ export async function checkDockerStatus(): Promise<DockerStatus> {
 export async function installProvider(provider: DockerProvider): Promise<void> {
   if (provider === 'orbstack') {
     if (!isMac()) {
+      log.error('Attempted to install OrbStack on non-macOS system');
       throw new Error('OrbStack is only available on macOS');
     }
     // Use our own implementation to capture output on failure
@@ -92,6 +94,7 @@ export async function installProvider(provider: DockerProvider): Promise<void> {
       rejectOnErrorCode: false,
     });
     if (result?.code) {
+      log.error({ output: result.output }, 'Error installing OrbStack');
       throw new Error(`Failed to install OrbStack.\n\n${result.output}`);
     }
   } else {
@@ -100,6 +103,7 @@ export async function installProvider(provider: DockerProvider): Promise<void> {
     try {
       await ensureDockerInstalled();
     } catch (err: unknown) {
+      log.error({ err }, 'Error installing Docker Desktop');
       const error = err as { message?: string };
       throw new Error(
         `Failed to install Docker Desktop.\n\n${error.message ?? String(err)}`,

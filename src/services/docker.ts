@@ -4,6 +4,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { $ } from 'bun';
 import { nanoid } from 'nanoid';
 import packageJson from '../../package.json' with { type: 'json' };
 // Import the Dockerfile as text - Bun's bundler embeds this in the binary
@@ -11,6 +12,7 @@ import SANDBOX_DOCKERFILE from '../../sandbox/Dockerfile' with { type: 'text' };
 import { formatShellError, type ShellError } from '../utils';
 import type { AgentType } from './config';
 import type { RepoInfo } from './git';
+import { log } from './logger';
 
 // Compute MD5 hash of the Dockerfile content for versioned tagging
 const hasher = new Bun.CryptoHasher('md5');
@@ -57,7 +59,7 @@ const GHCR_IMAGE_TAG_VERSION = `${GHCR_IMAGE_NAME}:${packageJson.version}`;
 
 async function dockerImageExists(): Promise<boolean> {
   try {
-    await Bun.$`docker image inspect ${DOCKER_IMAGE_TAG}`.quiet();
+    await $`docker image inspect ${DOCKER_IMAGE_TAG}`.quiet();
     return true;
   } catch {
     return false;
@@ -137,7 +139,8 @@ async function loginToGhcr(credentials: GhcrCredentials): Promise<boolean> {
     );
     const exitCode = await proc.exited;
     return exitCode === 0;
-  } catch {
+  } catch (error) {
+    log.error({ error }, 'Docker login to GHCR failed');
     return false;
   }
 }
@@ -150,7 +153,7 @@ const MAX_GHCR_LOGIN_ATTEMPTS = 3;
  */
 async function tryPullImage(imageTag: string): Promise<boolean> {
   try {
-    await Bun.$`docker pull ${imageTag}`.quiet();
+    await $`docker pull ${imageTag}`.quiet();
     return true;
   } catch {
     return false;
@@ -181,7 +184,7 @@ async function ensureGhcrDockerLoginValid(
       }
       // Credentials exist but are invalid - logout and request new ones
       try {
-        await Bun.$`docker logout ${GHCR_REGISTRY}`.quiet();
+        await $`docker logout ${GHCR_REGISTRY}`.quiet();
       } catch {
         // Ignore logout errors
       }
@@ -456,7 +459,7 @@ export async function listHermesSessions(): Promise<HermesSession[]> {
   try {
     // Get all containers (running and stopped) with hermes.managed=true label
     const result =
-      await Bun.$`docker ps -a --filter label=hermes.managed=true --format {{.ID}}`.quiet();
+      await $`docker ps -a --filter label=hermes.managed=true --format {{.ID}}`.quiet();
     const containerIds = result.stdout
       .toString()
       .trim()
@@ -468,7 +471,7 @@ export async function listHermesSessions(): Promise<HermesSession[]> {
     }
 
     // Inspect each container to get full details
-    const inspectResult = await Bun.$`docker inspect ${containerIds}`.quiet();
+    const inspectResult = await $`docker inspect ${containerIds}`.quiet();
     const containers: DockerInspectResult[] = JSON.parse(
       inspectResult.stdout.toString(),
     );
@@ -510,7 +513,8 @@ export async function listHermesSessions(): Promise<HermesSession[]> {
         finishedAt: status === 'exited' ? state.FinishedAt : undefined,
       };
     });
-  } catch {
+  } catch (error) {
+    log.error({ error }, 'Failed to list hermes sessions');
     // If docker command fails, return empty array
     return [];
   }
@@ -522,7 +526,7 @@ export async function listHermesSessions(): Promise<HermesSession[]> {
 export async function removeContainer(nameOrId: string): Promise<void> {
   let resumeImage: string | null = null;
   try {
-    const result = await Bun.$`docker inspect ${nameOrId}`.quiet();
+    const result = await $`docker inspect ${nameOrId}`.quiet();
     const containers: DockerInspectResult[] = JSON.parse(
       result.stdout.toString(),
     );
@@ -534,11 +538,11 @@ export async function removeContainer(nameOrId: string): Promise<void> {
     resumeImage = null;
   }
 
-  await Bun.$`docker rm -f ${nameOrId}`.quiet();
+  await $`docker rm -f ${nameOrId}`.quiet();
 
   if (resumeImage) {
     try {
-      await Bun.$`docker rmi ${resumeImage}`.quiet();
+      await $`docker rmi ${resumeImage}`.quiet();
     } catch {
       // Ignore image removal errors
     }
@@ -549,7 +553,7 @@ export async function removeContainer(nameOrId: string): Promise<void> {
  * Stop a running container gracefully
  */
 export async function stopContainer(nameOrId: string): Promise<void> {
-  await Bun.$`docker stop ${nameOrId}`.quiet();
+  await $`docker stop ${nameOrId}`.quiet();
 }
 
 /**
@@ -568,7 +572,7 @@ export async function getContainerLogs(
   tail?: number,
 ): Promise<string> {
   const tailArg = tail ? ['--tail', String(tail)] : [];
-  const result = await Bun.$`docker logs ${tailArg} ${nameOrId} 2>&1`.quiet();
+  const result = await $`docker logs ${tailArg} ${nameOrId} 2>&1`.quiet();
   return normalizeLineEndings(result.stdout.toString());
 }
 
@@ -696,25 +700,29 @@ export async function resumeSession(
 
   let container: DockerInspectResult | undefined;
   try {
-    const result = await Bun.$`docker inspect ${nameOrId}`.quiet();
+    const result = await $`docker inspect ${nameOrId}`.quiet();
     const containers: DockerInspectResult[] = JSON.parse(
       result.stdout.toString(),
     );
     container = containers[0];
-  } catch {
+  } catch (error) {
+    log.error({ error }, `Failed to inspect container ${nameOrId}`);
     throw new Error(`Container ${nameOrId} not found`);
   }
 
   if (!container) {
+    log.error(`Container ${nameOrId} not found`);
     throw new Error(`Container ${nameOrId} not found`);
   }
 
   const labels = container.Config.Labels ?? {};
   if (labels['hermes.managed'] !== 'true') {
+    log.error(`Container ${nameOrId} is not managed by hermes`);
     throw new Error('Container is not managed by hermes');
   }
 
   if (container.State?.Running) {
+    log.error(`Container ${nameOrId} is already running`);
     throw new Error('Container is already running');
   }
 
@@ -724,8 +732,9 @@ export async function resumeSession(
   const resumeImage = `hermes-resume:${container.Id.slice(0, 12)}-${resumeSuffix}`;
 
   try {
-    await Bun.$`docker commit ${container.Id} ${resumeImage}`.quiet();
+    await $`docker commit ${container.Id} ${resumeImage}`.quiet();
   } catch (err) {
+    log.error({ err }, 'Error creating resume image');
     throw formatShellError(err as ShellError);
   }
 
@@ -781,7 +790,7 @@ ${escapePrompt(agentCommand, prompt)}
 
   try {
     if (mode === 'detached') {
-      const result = await Bun.$`docker run -d \
+      const result = await $`docker run -d \
         --name ${containerName} \
         ${labelArgs} \
         ${envArgs} \
@@ -812,8 +821,9 @@ ${escapePrompt(agentCommand, prompt)}
     );
     await proc.exited;
     return containerName;
-  } catch (err) {
-    throw formatShellError(err as ShellError);
+  } catch (error) {
+    log.error({ error }, 'Error resuming container');
+    throw formatShellError(error as ShellError);
   }
 }
 
@@ -824,7 +834,7 @@ export async function getSession(
   nameOrId: string,
 ): Promise<HermesSession | null> {
   try {
-    const result = await Bun.$`docker inspect ${nameOrId}`.quiet();
+    const result = await $`docker inspect ${nameOrId}`.quiet();
     const containers: DockerInspectResult[] = JSON.parse(
       result.stdout.toString(),
     );
@@ -879,6 +889,10 @@ export async function getSession(
     return null;
   }
 }
+
+const printArgs = (args: string[]): string => {
+  return args.map((arg) => $.escape(arg)).join(' ');
+};
 
 // ============================================================================
 // Container Creation
@@ -985,7 +999,21 @@ ${escapePrompt(agentCommand, fullPrompt)}
 
   try {
     if (detach) {
-      const result = await Bun.$`docker run -d \
+      log.debug(
+        {
+          cmd: `docker run -d \
+        --name ${containerName} \
+        ${printArgs(labelArgs)} \
+        ${printArgs(hostEnvArgs)} \
+        --env-file ${hermesEnvPath} \
+        ${printArgs(envArgs)} \
+        ${printArgs(volumeArgs)} \
+        ${DOCKER_IMAGE_TAG} \
+        bash -c ${$.escape(startupScript)}`,
+        },
+        'Starting docker container in detached mode',
+      );
+      const result = await $`docker run -d \
         --name ${containerName} \
         ${labelArgs} \
         ${hostEnvArgs} \
@@ -998,31 +1026,31 @@ ${escapePrompt(agentCommand, fullPrompt)}
     }
 
     // Interactive/foreground mode - use Bun.spawn with inherited stdio for proper TTY
-    const proc = Bun.spawn(
-      [
-        'docker',
-        'run',
-        '-it',
-        '--name',
-        containerName,
-        ...labelArgs,
-        ...hostEnvArgs,
-        '--env-file',
-        hermesEnvPath,
-        ...envArgs,
-        ...volumeArgs,
-        DOCKER_IMAGE_TAG,
-        'bash',
-        '-c',
-        startupScript,
-      ],
-      {
-        stdio: ['inherit', 'inherit', 'inherit'],
-      },
-    );
+    const spawnArgs = [
+      'docker',
+      'run',
+      '-it',
+      '--name',
+      containerName,
+      ...labelArgs,
+      ...hostEnvArgs,
+      '--env-file',
+      hermesEnvPath,
+      ...envArgs,
+      ...volumeArgs,
+      DOCKER_IMAGE_TAG,
+      'bash',
+      '-c',
+      startupScript,
+    ];
+    log.debug({ spawnArgs }, 'Starting docker container');
+    const proc = Bun.spawn(spawnArgs, {
+      stdio: ['inherit', 'inherit', 'inherit'],
+    });
     await proc.exited;
     return null;
-  } catch (err) {
-    throw formatShellError(err as ShellError);
+  } catch (error) {
+    log.error({ error }, 'Error starting container');
+    throw formatShellError(error as ShellError);
   }
 }

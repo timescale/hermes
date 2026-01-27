@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { formatShellError, type ShellError } from '../utils';
+import { log } from './logger';
 
 export interface ForkResult {
   service_id: string;
@@ -37,6 +38,7 @@ export async function forkDatabase(
       await Bun.$`tiger svc fork ${baseArgs} ${forkArgs} -o json`.quiet();
     jsonOutput = proc.stdout.toString();
   } catch (err) {
+    log.error({ err }, 'Failed to fork database');
     throw formatShellError(err as ShellError);
   }
   const metadata = JSON.parse(jsonOutput);
@@ -48,6 +50,10 @@ export async function forkDatabase(
       await Bun.$`tiger svc get ${metadata.service_id} -o env --with-password`.quiet();
     envOutput = proc.stdout.toString();
   } catch (err) {
+    log.error(
+      { err },
+      'Failed to get environment variables for forked database',
+    );
     throw formatShellError(err as ShellError);
   }
   const envVars = parseEnvOutput(envOutput);

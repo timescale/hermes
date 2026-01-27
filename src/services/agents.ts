@@ -6,6 +6,7 @@ import type { SelectOption } from '@opentui/core';
 import { useEffect, useState } from 'react';
 import type { AgentType } from './config';
 import { getDockerImageTag, getOpencodeAuthMount } from './docker';
+import { log } from './logger';
 
 export interface Model {
   id: string;
@@ -87,6 +88,12 @@ async function getOpencodeModels(): Promise<readonly Model[]> {
     // Build the command with auth setup if needed
     const script = `${opencodeAuth.setupScript}\nexec opencode models`.trim();
 
+    log.debug(
+      {
+        cmd: `docker run --rm ${opencodeAuth.volumeArgs.join(' ')} ${imageTag} bash -c "${script}"`,
+      },
+      'Fetching OpenCode models',
+    );
     const result =
       await Bun.$`docker run --rm ${opencodeAuth.volumeArgs} ${imageTag} bash -c ${script}`.quiet();
     const output = result.stdout.toString().trim();
@@ -94,7 +101,8 @@ async function getOpencodeModels(): Promise<readonly Model[]> {
       .split('\n')
       .filter((line) => line.length > 0)
       .map(openCodeIdToModel);
-  } catch {
+  } catch (error) {
+    log.error({ error }, 'Failed to get opencode models');
     // Return empty array if docker or opencode fails
     return [];
   }

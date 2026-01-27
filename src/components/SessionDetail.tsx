@@ -6,6 +6,7 @@ import {
   removeContainer,
   stopContainer,
 } from '../services/docker';
+import { log } from '../services/logger';
 import { ConfirmModal } from './ConfirmModal';
 import { Frame } from './Frame';
 import { HotkeysBar } from './HotkeysBar';
@@ -141,6 +142,7 @@ export function SessionDetail({
         setSession(updated);
       }
     } catch (err) {
+      log.error({ err }, `Failed to stop container ${session.containerId}`);
       showToast(`Failed to stop: ${err}`, 'error');
     } finally {
       setActionInProgress(false);
@@ -155,6 +157,7 @@ export function SessionDetail({
       showToast('Container removed', 'success');
       setTimeout(() => onSessionDeleted(), 1000);
     } catch (err) {
+      log.error({ err }, `Failed to remove container ${session.containerId}`);
       showToast(`Failed to remove: ${err}`, 'error');
       setActionInProgress(false);
     }
@@ -179,6 +182,7 @@ export function SessionDetail({
         showToast('Resume started', 'success');
         onBack();
       } catch (err) {
+        log.error({ err }, `Failed to resume container ${session.containerId}`);
         showToast(`Failed to resume: ${err}`, 'error');
       } finally {
         setActionInProgress(false);
