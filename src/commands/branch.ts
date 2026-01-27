@@ -6,7 +6,7 @@ import { Command } from 'commander';
 import { runDockerSetupScreen } from '../components/DockerSetupScreen';
 import { type AgentType, readConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
-import { ensureDockerImage, startContainer } from '../services/docker';
+import { startContainer } from '../services/docker';
 import {
   generateBranchName,
   getRepoInfo,
@@ -102,7 +102,7 @@ export async function branchAction(
     console.log(`  Database fork created: ${forkResult.name}`);
   }
 
-  // Step 7: Ensure Docker is ready (installed and running)
+  // Step 7: Ensure Docker is ready (installed and running) and image is built
   const dockerResult = await runDockerSetupScreen();
   if (dockerResult.type === 'cancelled') {
     console.log('Cancelled.');
@@ -113,10 +113,7 @@ export async function branchAction(
     process.exit(1);
   }
 
-  // Step 8: Ensure Docker image exists (build if missing)
-  await ensureDockerImage();
-
-  // Step 9: Start container (repo will be cloned inside container)
+  // Step 8: Start container (repo will be cloned inside container)
   console.log(
     `Starting agent container (using ${effectiveAgent}${effectiveModel ? ` with ${effectiveModel}` : ''})...`,
   );

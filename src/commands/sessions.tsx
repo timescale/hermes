@@ -30,7 +30,6 @@ import {
   resumeSession,
   startContainer,
 } from '../services/docker';
-import { dockerIsRunning } from '../services/dockerSetup';
 import { generateBranchName, getRepoInfo } from '../services/git';
 import { log } from '../services/logger';
 import { ensureGitignore, restoreConsole } from '../utils';
@@ -180,9 +179,21 @@ function SessionsApp({
 
         // Step 5: Ensure Docker image exists
         setView((v) =>
-          v.type === 'starting' ? { ...v, step: 'Preparing Docker image' } : v,
+          v.type === 'starting' ? { ...v, step: 'Checking Docker image' } : v,
         );
-        await ensureDockerImage();
+        await ensureDockerImage({
+          onProgress: (progress) => {
+            if (progress.type === 'pulling-cache') {
+              setView((v) =>
+                v.type === 'starting' ? { ...v, step: progress.message } : v,
+              );
+            } else if (progress.type === 'building') {
+              setView((v) =>
+                v.type === 'starting' ? { ...v, step: progress.message } : v,
+              );
+            }
+          },
+        });
 
         // Step 6: Start container (always detached in TUI mode)
         setView((v) =>
@@ -223,58 +234,11 @@ function SessionsApp({
     [showToast, setView],
   );
 
-  // Initialize: check docker, then config, then go to target view
-  // Only runs once on mount - we use refs to access current values without triggering re-runs
+  // Initialize: always go through docker setup first (handles both runtime and image)
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally only runs on mount
   useEffect(() => {
-    let cancelled = false;
-
-    async function init() {
-      // Step 1: Check if Docker is running
-      const isDockerReady = await dockerIsRunning();
-      if (cancelled) return;
-
-      if (!isDockerReady) {
-        setView({ type: 'docker' });
-        return;
-      }
-
-      // Step 2: Check if config exists
-      const existingConfig = await readConfig();
-      if (cancelled) return;
-
-      if (!existingConfig) {
-        setView({ type: 'config' });
-        return;
-      }
-
-      setConfig(existingConfig);
-
-      // Step 3: Go to target view based on props at mount time
-      const {
-        initialView: targetView,
-        initialPrompt: prompt,
-        initialAgent,
-        initialModel,
-      } = propsRef.current;
-
-      if (targetView === 'starting' && prompt) {
-        const agent = initialAgent ?? existingConfig.agent ?? 'opencode';
-        const model = initialModel ?? existingConfig.model ?? '';
-        startSession(prompt, agent, model);
-      } else if (targetView === 'prompt') {
-        setView({ type: 'prompt' });
-      } else {
-        setView({ type: 'list' });
-      }
-    }
-
-    init();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Always start with docker setup - it handles both Docker runtime and image building
+    setView({ type: 'docker' });
   }, []);
 
   // Handle docker setup completion

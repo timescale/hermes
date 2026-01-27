@@ -23,7 +23,7 @@ import {
   readConfig,
   writeConfig,
 } from '../services/config';
-import { ensureDockerImage, getDockerImageTag } from '../services/docker';
+import { getDockerImageTag } from '../services/docker';
 import { listServices, type TigerService } from '../services/tiger';
 import { ensureGitignore, restoreConsole } from '../utils';
 
@@ -86,19 +86,6 @@ export function ConfigWizard({ onComplete }: ConfigWizardProps) {
     let cancelled = false;
 
     const checkAuth = async () => {
-      // First, ensure Docker image is built (needed for container auth)
-      try {
-        await ensureDockerImage();
-      } catch (err) {
-        if (!cancelled) {
-          onComplete({
-            type: 'error',
-            message: `Failed to build Docker image: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
-        return;
-      }
-
       // Try host auth first
       const hostResult = await tryHostGhAuth();
       if (cancelled) return;
@@ -110,6 +97,7 @@ export function ConfigWizard({ onComplete }: ConfigWizardProps) {
       }
 
       // Need to do container-based auth
+      // Docker image is already ensured by the DockerSetup step
       const dockerImage = getDockerImageTag();
       const authProcess = await startContainerGhAuth(dockerImage);
 

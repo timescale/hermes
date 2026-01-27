@@ -1,5 +1,11 @@
 {
   "permissions": {
-    "allow": ["Bash(bun run typecheck:*)", "Bash(bun run lint:*)"]
+    "allow": [
+      "Bash(./bun run lint:*)",
+      "Bash(./bun run typecheck:*)",
+      "Bash(./bun test:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)"
+    ]
   }
 }
