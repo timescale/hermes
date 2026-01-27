@@ -65,7 +65,7 @@ export async function branchAction(
 
   // Step 2: Generate branch name
   console.log('Generating branch name...');
-  const branchName = await generateBranchName(prompt);
+  const branchName = await generateBranchName(prompt, console.log);
   console.log(`  Branch name: ${branchName}`);
 
   // Step 3: Ensure .gitignore has .hermes/ entry

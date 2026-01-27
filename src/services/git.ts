@@ -114,6 +114,7 @@ async function getExistingContainers(): Promise<string[]> {
 
 export async function generateBranchName(
   prompt: string,
+  onProgress?: (message: string) => void,
   maxRetries: number = 3,
 ): Promise<string> {
   // Gather all existing names to avoid conflicts
@@ -164,7 +165,8 @@ ${[...allExistingNames].join(', ')}`;
       result = proc.stdout.toString();
     } catch (err) {
       log.error({ err }, 'Failed to generate branch name with Claude');
-      throw formatShellError(err as ShellError);
+      onProgress?.('Failed to generate branch name with Claude');
+      break;
     }
     const branchName = result.trim().toLowerCase();
 
@@ -173,13 +175,13 @@ ${[...allExistingNames].join(', ')}`;
 
     const [isValid, reason] = isValidBranchName(cleaned);
     if (!isValid) {
-      console.log(`  Attempt ${attempt} is invalid (${reason})`);
+      onProgress?.(`Attempt ${attempt} is invalid (${reason})`);
       lastAttempt = cleaned.slice(0, 100);
       continue;
     }
 
     if (allExistingNames.has(cleaned)) {
-      console.log(`  Attempt ${attempt}: '${cleaned}' already exists`);
+      onProgress?.(`Attempt ${attempt}: '${cleaned}' already exists`);
       lastAttempt = cleaned;
       allExistingNames.add(cleaned); // Add to set to avoid suggesting again
       continue;
@@ -188,7 +190,7 @@ ${[...allExistingNames].join(', ')}`;
     return cleaned;
   }
 
-  console.log('  Failed to generate a valid branch name, using a random name.');
+  onProgress?.('Failed to generate a valid branch name, using a random name.');
   // Fallback: use a generic name with random suffix
   let fallbackName: string;
   do {
