@@ -23,6 +23,7 @@ export function getLogger(): Logger {
       },
       pino.destination({
         dest: LOG_FILE,
+        sync: true,
       }),
     );
   }
