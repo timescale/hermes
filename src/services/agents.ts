@@ -5,7 +5,7 @@
 import type { SelectOption } from '@opentui/core';
 import { useEffect, useState } from 'react';
 import type { AgentType } from './config';
-import { getDockerImageTag, getOpencodeAuthMount } from './docker';
+import { getOpencodeAuthMount, HASHED_SANDBOX_DOCKER_IMAGE } from './docker';
 import { log } from './logger';
 
 export interface Model {
@@ -82,7 +82,7 @@ export const openCodeIdToModel = (id: string): Model => {
  */
 async function getOpencodeModels(): Promise<readonly Model[]> {
   try {
-    const imageTag = getDockerImageTag();
+    const imageTag = HASHED_SANDBOX_DOCKER_IMAGE;
     const opencodeAuth = await getOpencodeAuthMount();
 
     // Build the command with auth setup if needed

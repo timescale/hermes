@@ -4,12 +4,15 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { dockerIsRunning } from 'build-strap';
 import { $ } from 'bun';
 import { nanoid } from 'nanoid';
 import packageJson from '../../package.json' with { type: 'json' };
 // Import the Dockerfile as text - Bun's bundler embeds this in the binary
 import SANDBOX_DOCKERFILE from '../../sandbox/Dockerfile' with { type: 'text' };
+import { runDockerSetupScreen } from '../components/DockerSetupScreen';
 import { formatShellError, type ShellError } from '../utils';
+import { CLAUDE_CONFIG_VOLUME } from './claude';
 import type { AgentType } from './config';
 import type { RepoInfo } from './git';
 import { log } from './logger';
@@ -37,14 +40,8 @@ exec ${cmd} "$HERMES_PROMPT"
     : `exec ${cmd}`;
 
 const DOCKER_IMAGE_NAME = 'hermes-sandbox';
-const DOCKER_IMAGE_TAG = `${DOCKER_IMAGE_NAME}:md5-${dockerfileHash}`;
-
-/**
- * Get the Docker image tag for the current sandbox image
- */
-export function getDockerImageTag(): string {
-  return DOCKER_IMAGE_TAG;
-}
+const DOCKER_IMAGE_TAG = `md5-${dockerfileHash}`;
+export const HASHED_SANDBOX_DOCKER_IMAGE = `${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}`;
 
 // GHCR (GitHub Container Registry) configuration
 const GHCR_REGISTRY = 'ghcr.io';
@@ -57,14 +54,30 @@ const GHCR_IMAGE_TAG_VERSION = `${GHCR_IMAGE_NAME}:${packageJson.version}`;
 // Docker Image Management
 // ============================================================================
 
-async function dockerImageExists(): Promise<boolean> {
+export async function dockerImageExists(): Promise<boolean> {
   try {
-    await $`docker image inspect ${DOCKER_IMAGE_TAG}`.quiet();
-    return true;
+    const proc =
+      await $`docker image ls --format json ${HASHED_SANDBOX_DOCKER_IMAGE}`.quiet();
+    const output = proc.json();
+    log.debug({ output }, 'dockerImageExists');
+    return output.Tag === DOCKER_IMAGE_TAG;
   } catch {
     return false;
   }
 }
+
+export const ensureDockerSandbox = async (): Promise<void> => {
+  if (!(await dockerIsRunning()) || !(await dockerImageExists())) {
+    const dockerResult = await runDockerSetupScreen();
+    log.debug({ dockerResult }, 'ensureDockerSandbox');
+    if (dockerResult.type === 'cancelled') {
+      throw new Error('Docker setup was cancelled by the user');
+    }
+    if (dockerResult.type === 'error') {
+      throw new Error(`Docker setup failed: ${dockerResult.error}`);
+    }
+  }
+};
 
 async function buildDockerImage(): Promise<void> {
   // Use Bun.spawn to pipe the Dockerfile content to docker build
@@ -944,7 +957,11 @@ export async function startContainer(
 
   // Get opencode auth mount configuration
   const opencodeAuth = await getOpencodeAuthMount();
-  const volumeArgs: string[] = [...opencodeAuth.volumeArgs];
+  const volumeArgs: string[] = [
+    '-v',
+    CLAUDE_CONFIG_VOLUME,
+    ...opencodeAuth.volumeArgs,
+  ];
 
   // Mount gh credentials from .hermes/gh if they exist
   volumeArgs.push(...(await getGhCredentialsMountArgs()));

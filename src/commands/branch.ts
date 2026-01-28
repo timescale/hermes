@@ -3,11 +3,10 @@
 // ============================================================================
 
 import { Command } from 'commander';
-import { runDockerSetupScreen } from '../components/DockerSetupScreen';
 import { hasLocalGhAuth } from '../services/auth';
 import { type AgentType, readConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
-import { startContainer } from '../services/docker';
+import { ensureDockerSandbox, startContainer } from '../services/docker';
 import {
   generateBranchName,
   getRepoInfo,
@@ -58,6 +57,8 @@ export async function branchAction(
     process.exit(1);
   }
 
+  await ensureDockerSandbox();
+
   // Step 1: Get repo info
   console.log('Getting repository info...');
   const repoInfo = await getRepoInfo();
@@ -101,17 +102,6 @@ export async function branchAction(
     console.log('Forking database (this may take a few minutes)...');
     forkResult = await forkDatabase(branchName, effectiveServiceId);
     console.log(`  Database fork created: ${forkResult.name}`);
-  }
-
-  // Step 7: Ensure Docker is ready (installed and running) and image is built
-  const dockerResult = await runDockerSetupScreen();
-  if (dockerResult.type === 'cancelled') {
-    console.log('Cancelled.');
-    return;
-  }
-  if (dockerResult.type === 'error') {
-    console.error(`Docker setup failed: ${dockerResult.error}`);
-    process.exit(1);
   }
 
   // Step 8: Ensure GitHub auth is configured

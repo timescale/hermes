@@ -8,6 +8,7 @@ import {
   branchCommand,
   withBranchOptions,
 } from './commands/branch';
+import { claudeCommand } from './commands/claude';
 import { configCommand } from './commands/config';
 import { logsCommand } from './commands/logs';
 import { resumeCommand } from './commands/resume';
@@ -58,6 +59,7 @@ withBranchOptions(program)
 
 // Add subcommands (after root options so they take precedence)
 program.addCommand(branchCommand);
+program.addCommand(claudeCommand);
 program.addCommand(configCommand);
 program.addCommand(logsCommand);
 program.addCommand(resumeCommand);

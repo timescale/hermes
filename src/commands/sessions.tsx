@@ -157,44 +157,16 @@ function SessionsApp({
       model: string,
       mode: SubmitMode = 'async',
     ) => {
-      log.debug({ agent, model, prompt, mode }, 'startSession received');
-      setView({
-        type: 'starting',
-        prompt,
-        agent,
-        model,
-        step: 'Getting repository info',
-      });
-
       try {
-        // Step 1: Get repo info
-        const repoInfo = await getRepoInfo();
+        log.debug({ agent, model, prompt, mode }, 'startSession received');
 
-        // Step 2: Generate branch name
-        setView((v) =>
-          v.type === 'starting' ? { ...v, step: 'Generating branch name' } : v,
-        );
-        const branchName = await generateBranchName(prompt);
-
-        // Step 3: Ensure .gitignore has .hermes/ entry
-        await ensureGitignore();
-
-        // Step 4: Fork database if configured
-        const { serviceId: svcId, dbFork: doFork } = propsRef.current;
-        const effectiveServiceId = svcId ?? configRef.current?.tigerServiceId;
-        let forkResult: ForkResult | null = null;
-
-        if (doFork && effectiveServiceId) {
-          setView((v) =>
-            v.type === 'starting' ? { ...v, step: 'Forking database' } : v,
-          );
-          forkResult = await forkDatabase(branchName, effectiveServiceId);
-        }
-
-        // Step 5: Ensure Docker image exists
-        setView((v) =>
-          v.type === 'starting' ? { ...v, step: 'Checking Docker image' } : v,
-        );
+        setView({
+          type: 'starting',
+          prompt,
+          agent,
+          model,
+          step: 'Preparing sandbox environment',
+        });
         await ensureDockerImage({
           onProgress: (progress) => {
             if (progress.type === 'pulling-cache') {
@@ -209,7 +181,28 @@ function SessionsApp({
           },
         });
 
-        // Step 6: Ensure GitHub auth is configured
+        setView((v) =>
+          v.type === 'starting' ? { ...v, step: 'Getting repository info' } : v,
+        );
+        const repoInfo = await getRepoInfo();
+
+        setView((v) =>
+          v.type === 'starting' ? { ...v, step: 'Generating branch name' } : v,
+        );
+        const branchName = await generateBranchName(prompt);
+
+        await ensureGitignore();
+
+        const { serviceId: svcId, dbFork: doFork } = propsRef.current;
+        const effectiveServiceId = svcId ?? configRef.current?.tigerServiceId;
+        let forkResult: ForkResult | null = null;
+        if (doFork && effectiveServiceId) {
+          setView((v) =>
+            v.type === 'starting' ? { ...v, step: 'Forking database' } : v,
+          );
+          forkResult = await forkDatabase(branchName, effectiveServiceId);
+        }
+
         if (!(await hasLocalGhAuth())) {
           throw new Error(
             'GitHub authentication not configured. Run `hermes config` to set up.',
@@ -231,7 +224,6 @@ function SessionsApp({
           return;
         }
 
-        // Step 7: Start container (detached for async mode)
         setView((v) =>
           v.type === 'starting'
             ? { ...v, step: 'Starting agent container' }
@@ -248,7 +240,6 @@ function SessionsApp({
           envVars: forkResult?.envVars,
         });
 
-        // Step 8: Fetch the created session
         setView((v) =>
           v.type === 'starting' ? { ...v, step: 'Loading session' } : v,
         );

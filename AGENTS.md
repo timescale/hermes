@@ -16,11 +16,8 @@ Always use `./bun` wrapper script (auto-installs pinned Bun version):
 # Linting and formatting (check only)
 ./bun run lint
 
-# Linting and formatting (auto-fix) - RUN AFTER EVERY EDIT
+# Linting and formatting (auto-fix)
 ./bun run lint --write
-
-# Build standalone binary
-./bun run build
 
 # Run tests
 ./bun test
@@ -31,14 +28,17 @@ Always use `./bun` wrapper script (auto-installs pinned Bun version):
 # Run tests matching a pattern
 ./bun test --test-name-pattern "pattern"
 
+# Shorthand for all checks (typecheck, lint auto-fix, tests)
+./bun run check
+
+# Build standalone binary
+./bun run build
+
 # Run the CLI directly
 ./bun index.ts <command>
 ```
 
-**Important**: After making code changes, always run:
-1. `./bun run lint --write` - Fix formatting/linting issues
-2. `./bun run typecheck` - Ensure no type errors
-3. `./bun test` - Ensure all tests pass
+**Important**: After making code changes, always run `./bun run check`.
 
 ## Code Style
 

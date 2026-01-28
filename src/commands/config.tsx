@@ -23,7 +23,7 @@ import {
   readConfig,
   writeConfig,
 } from '../services/config';
-import { getDockerImageTag } from '../services/docker';
+import { HASHED_SANDBOX_DOCKER_IMAGE } from '../services/docker';
 import { listServices, type TigerService } from '../services/tiger';
 import { ensureGitignore, restoreConsole } from '../utils';
 
@@ -98,7 +98,7 @@ export function ConfigWizard({ onComplete }: ConfigWizardProps) {
 
       // Need to do container-based auth
       // Docker image is already ensured by the DockerSetup step
-      const dockerImage = getDockerImageTag();
+      const dockerImage = HASHED_SANDBOX_DOCKER_IMAGE;
       const authProcess = await startContainerGhAuth(dockerImage);
 
       if (cancelled) {

@@ -4,6 +4,7 @@
 
 import { nanoid } from 'nanoid';
 import { formatShellError, type ShellError } from '../utils';
+import { runClaudeInDocker } from './claude';
 import { log } from './logger';
 
 export interface RepoInfo {
@@ -161,8 +162,10 @@ ${[...allExistingNames].join(', ')}`;
 
     let result: string;
     try {
-      const proc = await Bun.$`claude --model haiku -p ${claudePrompt}`.quiet();
-      result = proc.stdout.toString();
+      const proc = await runClaudeInDocker({
+        claudeArgs: ['--model', 'haiku', '-p', claudePrompt],
+      });
+      result = proc.text();
     } catch (err) {
       log.error({ err }, 'Failed to generate branch name with Claude');
       onProgress?.('Failed to generate branch name with Claude');
