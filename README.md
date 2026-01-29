@@ -11,6 +11,14 @@ git clone git@github.com:timescale/hermes.git
 cd hermes
 ./bun i && ./bun link
 source ~/.zshrc # or restart your shell
+# you may need to link _again_ after restarting shell
+./bun link
+```
+
+While any terminal should be usable, we recommend using a modern terminal like [Ghostty](https://ghostty.org/) for the best TUI experience.
+
+```bash
+brew install --cask ghostty
 ```
 
 ## Usage
