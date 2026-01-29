@@ -48,6 +48,7 @@ export const HASHED_SANDBOX_DOCKER_IMAGE = `${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_
 // GHCR (GitHub Container Registry) configuration
 const GHCR_REGISTRY = 'ghcr.io';
 const GHCR_IMAGE_NAME = 'ghcr.io/timescale/hermes/sandbox';
+const GHCR_AUTH_TEST_TAG = 'ghcr.io/timescale/hermes/auth-test:latest';
 const GHCR_IMAGE_TAG_LATEST = `${GHCR_IMAGE_NAME}:latest`;
 // Version tag from package.json
 const GHCR_IMAGE_TAG_VERSION = `${GHCR_IMAGE_NAME}:${packageJson.version}`;
@@ -196,7 +197,7 @@ async function ensureGhcrDockerLoginValid(
     if (await hasGhcrCredentials()) {
       // Try to pull to verify credentials are still valid
       onProgress?.('Verifying stored credentials');
-      if (await tryPullImage(GHCR_IMAGE_TAG_LATEST)) {
+      if (await tryPullImage(GHCR_AUTH_TEST_TAG)) {
         return true; // Success
       }
       // Credentials exist but are invalid - logout and request new ones
@@ -231,7 +232,7 @@ async function ensureGhcrDockerLoginValid(
 
     // Verify login works by trying to pull
     onProgress?.('Pulling cache image');
-    if (await tryPullImage(GHCR_IMAGE_TAG_LATEST)) {
+    if (await tryPullImage(GHCR_AUTH_TEST_TAG)) {
       return true; // Success
     }
 
@@ -266,8 +267,11 @@ async function pullGhcrImageForCache(
     return GHCR_IMAGE_TAG_VERSION;
   }
 
-  // Fall back to latest (already pulled during auth validation)
-  return GHCR_IMAGE_TAG_LATEST;
+  // Fall back to latest
+  if (await tryPullImage(GHCR_IMAGE_TAG_LATEST)) {
+    return GHCR_IMAGE_TAG_LATEST;
+  }
+  return null;
 }
 
 /**
