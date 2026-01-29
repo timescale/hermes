@@ -3,7 +3,8 @@
 // ============================================================================
 
 import type { SelectOption } from '@opentui/core';
-import { useKeyboard } from '@opentui/react';
+import { createCliRenderer } from '@opentui/core';
+import { createRoot, useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureDockerImage, type ImageBuildProgress } from '../services/docker';
 import {
@@ -13,6 +14,8 @@ import {
   installProvider,
   startProvider,
 } from '../services/dockerSetup';
+import { restoreConsole } from '../utils';
+import { CopyOnSelect } from './CopyOnSelect';
 import { Loading } from './Loading';
 import { Selector } from './Selector';
 
@@ -404,4 +407,42 @@ export function DockerSetup({
       onBack={onBack}
     />
   );
+}
+
+/**
+ * Run the Docker setup screen as a standalone TUI.
+ * This is used by commands like `branch` that need to ensure Docker is ready
+ * but aren't part of a larger wizard flow.
+ *
+ * The TUI handles both Docker runtime setup and Docker image building.
+ *
+ * @returns Promise that resolves with the setup result
+ */
+export async function runDockerSetupScreen(): Promise<DockerSetupResult> {
+  // Always show the TUI - it handles both Docker setup and image building
+  // The DockerSetup component will skip straight to image building if Docker is already running
+  let resolveSetup: (result: DockerSetupResult) => void;
+  const setupPromise = new Promise<DockerSetupResult>((resolve) => {
+    resolveSetup = resolve;
+  });
+
+  const renderer = await createCliRenderer({ exitOnCtrlC: true });
+  const root = createRoot(renderer);
+
+  root.render(
+    <CopyOnSelect>
+      <DockerSetup
+        title="Docker Setup"
+        onComplete={(result) => resolveSetup(result)}
+      />
+    </CopyOnSelect>,
+  );
+
+  const result = await setupPromise;
+
+  await renderer.idle();
+  renderer.destroy();
+  restoreConsole();
+
+  return result;
 }

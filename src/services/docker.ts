@@ -9,7 +9,7 @@ import { nanoid } from 'nanoid';
 import packageJson from '../../package.json' with { type: 'json' };
 // Import the Dockerfile as text - Bun's bundler embeds this in the binary
 import SANDBOX_DOCKERFILE from '../../sandbox/Dockerfile' with { type: 'text' };
-import { runDockerSetupScreen } from '../components/DockerSetupScreen';
+import { runDockerSetupScreen } from '../components/DockerSetup';
 import { formatShellError, type ShellError } from '../utils';
 import { CLAUDE_CONFIG_VOLUME } from './claude';
 import type { AgentType } from './config';
