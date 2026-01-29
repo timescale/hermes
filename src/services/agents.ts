@@ -113,23 +113,30 @@ export async function getModelsForAgent(
 }
 
 // hook for models
-export const useAgentModels = (): Record<
-  AgentType,
-  null | readonly Model[]
-> => {
+export const useAgentModels = (
+  refreshKey: number | string | null = null,
+): Record<AgentType, null | readonly Model[]> => {
   const [map, setMap] = useState<Record<AgentType, null | readonly Model[]>>({
     claude: CLAUDE_MODELS,
     opencode: null,
   });
 
   useEffect(() => {
+    // Reset opencode models to null to show loading state during refresh
+    // refreshKey is used to trigger re-fetching models after adding a provider
+    if (refreshKey) {
+      setMap((prev) => ({
+        ...prev,
+        opencode: null,
+      }));
+    }
     getOpencodeModels().then((models) => {
       setMap((prev) => ({
         ...prev,
         opencode: models,
       }));
     });
-  }, []);
+  }, [refreshKey]);
 
   return map;
 };

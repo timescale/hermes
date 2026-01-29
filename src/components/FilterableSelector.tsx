@@ -1,6 +1,7 @@
-import type { ScrollBoxRenderable } from '@opentui/core';
+import type { KeyEvent, ScrollBoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
 import { useEffect, useRef, useState } from 'react';
+import { HotkeysBar } from './HotkeysBar';
 import {
   type BaseSelectorProps,
   getOptionValue,
@@ -9,7 +10,21 @@ import {
   scrollToIndex,
 } from './SelectorCommon.tsx';
 
-export type FilterableSelectorProps = BaseSelectorProps;
+export interface HotkeyConfig {
+  /** Display label for the hotkey (e.g., "ctrl+a") */
+  label: string;
+  /** Display description for the hotkey (e.g., "add provider") */
+  description: string;
+  /** Test function to check if the key event matches this hotkey */
+  test: (key: KeyEvent) => boolean;
+  /** Handler function to call when the hotkey is triggered */
+  handler: () => void;
+}
+
+export interface FilterableSelectorProps extends BaseSelectorProps {
+  /** Optional array of hotkeys to register */
+  hotkeys?: HotkeyConfig[];
+}
 
 export function FilterableSelector({
   title,
@@ -20,6 +35,7 @@ export function FilterableSelector({
   onSelect,
   onCancel,
   onBack,
+  hotkeys,
 }: FilterableSelectorProps) {
   const [filterText, setFilterText] = useState('');
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -62,6 +78,16 @@ export function FilterableSelector({
   }, []);
 
   useKeyboard((key) => {
+    // Check custom hotkeys first
+    if (hotkeys) {
+      for (const hotkey of hotkeys) {
+        if (hotkey.test(key)) {
+          hotkey.handler();
+          return;
+        }
+      }
+    }
+
     // Esc goes back if possible, otherwise cancels
     if (key.name === 'escape') {
       if (showBack && onBack) {
@@ -186,6 +212,12 @@ export function FilterableSelector({
         <text marginTop={1} fg="#555555">
           {filteredOptions.length} of {options.length} items shown
         </text>
+
+        {hotkeys && hotkeys.length > 0 && (
+          <HotkeysBar
+            keyList={hotkeys.map((h) => [h.label, h.description] as const)}
+          />
+        )}
       </box>
     </box>
   );

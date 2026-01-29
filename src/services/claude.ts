@@ -51,13 +51,15 @@ export const runClaudeInDocker = async ({
   });
 };
 
-export const checkClaudeCredentials = async (): Promise<boolean> => {
+export const checkClaudeCredentials = async (
+  model = 'haiku',
+): Promise<boolean> => {
   const proc = await runClaudeInDocker({
-    cmdArgs: ['--model', 'haiku', '-p', 'just output `true`, and nothing else'],
+    cmdArgs: ['--model', model, '-p', 'just output `true`, and nothing else'],
     shouldThrow: false,
   });
   const exitCode = await proc.exited;
   const output = proc.text().trim();
-  log.debug({ exitCode, output }, 'checkClaudeCredentials');
+  log.debug({ exitCode, output, model }, 'checkClaudeCredentials');
   return exitCode === 0;
 };

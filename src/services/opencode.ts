@@ -75,7 +75,9 @@ export const runOpencodeInDocker = async ({
   });
 };
 
-export const checkOpencodeCredentials = async (): Promise<boolean> => {
+export const checkOpencodeCredentials = async (
+  model?: string,
+): Promise<boolean> => {
   const proc = await runOpencodeInDocker({
     cmdArgs: ['auth', 'list'],
     shouldThrow: false,
@@ -91,11 +93,11 @@ export const checkOpencodeCredentials = async (): Promise<boolean> => {
   if (exitCode || !numCreds) {
     return false;
   }
-  const model = (await readConfig())?.model;
+  const effectiveModel = model ?? (await readConfig())?.model;
   const proc2 = await runOpencodeInDocker({
     cmdArgs: [
       'run',
-      ...(model ? ['--model', model] : []),
+      ...(effectiveModel ? ['--model', effectiveModel] : []),
       'just output `true`, and nothing else',
     ],
     shouldThrow: false,
@@ -104,7 +106,7 @@ export const checkOpencodeCredentials = async (): Promise<boolean> => {
   const output2 = proc2.text().trim();
   const errText = proc2.errorText().trim();
   log.debug(
-    { exitCode: exitCode2, output: output2, errText, model },
+    { exitCode: exitCode2, output: output2, errText, model: effectiveModel },
     'checkOpencodeCredentials test run',
   );
   return exitCode2 === 0 && !errText.includes('Error');
