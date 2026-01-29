@@ -4,9 +4,10 @@
 
 import { useKeyboard } from '@opentui/react';
 import open from 'open';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { copyToClipboard } from '../services/clipboard';
 import { log } from '../services/logger';
+import { Dots } from './Dots';
 import { Frame } from './Frame';
 
 export type GhAuthStatus =
@@ -22,8 +23,6 @@ export interface GhAuthProps {
 }
 
 export function GhAuth({ code, url, onComplete }: GhAuthProps) {
-  const count = useRef(0);
-  const [dots, setDots] = useState('');
   const [copied, setCopied] = useState(false);
   const [opened, setOpened] = useState(false);
 
@@ -47,14 +46,6 @@ export function GhAuth({ code, url, onComplete }: GhAuthProps) {
       );
   }, [code, url]);
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      count.current += 1;
-      setDots('.'.repeat(count.current % 4).padEnd(3, ' '));
-    }, 400);
-    return () => clearInterval(interval);
-  }, []);
-
   return (
     <Frame title="GitHub Authentication">
       <box flexDirection="column" alignItems="center">
@@ -73,7 +64,10 @@ export function GhAuth({ code, url, onComplete }: GhAuthProps) {
 
         <box height={2} />
 
-        <text fg="#888">Waiting for authentication{dots}</text>
+        <text fg="#888">
+          Waiting for authentication
+          <Dots />
+        </text>
 
         <box height={1} />
         <text fg="#555">Press Esc to cancel</text>

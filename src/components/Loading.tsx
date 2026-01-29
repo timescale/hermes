@@ -1,11 +1,11 @@
 import { useKeyboard } from '@opentui/react';
-import { useEffect, useRef, useState } from 'react';
+import { Dots } from './Dots';
 
 export interface LoadingProps {
   title?: string;
   message?: string;
   detail?: string;
-  onCancel: () => void;
+  onCancel?: () => void;
 }
 
 export function Loading({
@@ -14,28 +14,17 @@ export function Loading({
   detail,
   onCancel,
 }: LoadingProps) {
-  const count = useRef(0);
-  const [dots, setDots] = useState('');
-
   useKeyboard((key) => {
-    if (key.name === 'escape') {
+    if (onCancel && key.name === 'escape') {
       onCancel();
     }
   });
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      count.current += 1;
-      setDots('.'.repeat(count.current % 4).padEnd(3, ' '));
-    }, 300);
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <box flexDirection="column" padding={1} flexGrow={1}>
       <box
         title={title}
-        border
+        border={!!title}
         borderStyle="single"
         padding={1}
         flexDirection="column"
@@ -45,16 +34,18 @@ export function Loading({
       >
         <text fg="#eee">
           {message}
-          {dots}
+          <Dots />
         </text>
-        {detail && (
+        {detail ? (
           <text fg="#888" marginTop={1}>
             {detail}
           </text>
-        )}
-        <text fg="#555" marginTop={1}>
-          Press Esc to cancel
-        </text>
+        ) : null}
+        {onCancel ? (
+          <text fg="#555" marginTop={1}>
+            Press Esc to cancel
+          </text>
+        ) : null}
       </box>
     </box>
   );
