@@ -36,7 +36,7 @@ export function CopyOnSelect({ children }: CopyOnSelectProps) {
   };
 
   return (
-    <box flexGrow={1} onMouseUp={handleMouseUp}>
+    <box flexGrow={1} onMouseUp={handleMouseUp} backgroundColor="#0A0A0A">
       {children}
       {showToast && (
         <Toast
