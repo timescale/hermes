@@ -2,13 +2,15 @@
 // GitHub Authentication Service
 // ============================================================================
 
-import { mkdir } from 'node:fs/promises';
+import { chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { YAML } from 'bun';
+import { hermesConfigDir } from './config';
+import { HASHED_SANDBOX_DOCKER_IMAGE } from './docker';
 
-const HERMES_DIR = '.hermes';
-const GH_CONFIG_DIR = join(HERMES_DIR, 'gh');
-const GH_HOSTS_FILE = join(GH_CONFIG_DIR, 'hosts.yml');
+const ghConfigDir = () => join(hermesConfigDir(), 'gh');
+const GH_HOSTS_FILENAME = 'hosts.yml';
+export const ghConfigVolume = () => `${ghConfigDir()}:/home/agent/.config/gh`;
 
 // ============================================================================
 // Types
@@ -103,7 +105,7 @@ async function getHostGhUser(): Promise<string | null> {
  * Check if we have valid gh credentials in .hermes/gh/
  */
 export async function hasLocalGhAuth(): Promise<boolean> {
-  const file = Bun.file(GH_HOSTS_FILE);
+  const file = Bun.file(join(ghConfigDir(), GH_HOSTS_FILENAME));
   if (!(await file.exists())) {
     return false;
   }
@@ -121,7 +123,8 @@ export async function hasLocalGhAuth(): Promise<boolean> {
  * Write gh credentials to .hermes/gh/hosts.yml
  */
 async function writeGhCredentials(token: string, user: string): Promise<void> {
-  await mkdir(GH_CONFIG_DIR, { recursive: true });
+  const dir = ghConfigDir();
+  await mkdir(dir, { recursive: true });
 
   const hosts: GhHostsYaml = {
     'github.com': {
@@ -131,10 +134,11 @@ async function writeGhCredentials(token: string, user: string): Promise<void> {
     },
   };
 
-  await Bun.write(GH_HOSTS_FILE, YAML.stringify(hosts));
+  const file = join(dir, GH_HOSTS_FILENAME);
+  await Bun.write(file, YAML.stringify(hosts));
 
   // Set restrictive permissions on the hosts file
-  await Bun.$`chmod 600 ${GH_HOSTS_FILE}`.quiet();
+  await chmod(file, 0o600);
 }
 
 /**
@@ -160,14 +164,10 @@ async function exportHostGhAuth(): Promise<boolean> {
 // Container-based Interactive Auth
 // ============================================================================
 
-export interface GhDeviceCodeInfo {
-  code: string;
-  url: string;
-}
-
 export interface GhAuthProcess {
   /** The device code info parsed from gh output */
-  deviceCode: GhDeviceCodeInfo;
+  code: string;
+  url: string;
   /** Promise that resolves when auth completes (true) or fails (false) */
   waitForCompletion: () => Promise<boolean>;
   /** Kill the process if user cancels */
@@ -198,13 +198,9 @@ async function drainStream(
  * Start gh auth login in a Docker container and parse the device code.
  * Returns a handle to wait for completion or cancel.
  */
-export async function startContainerGhAuth(
-  dockerImage: string,
-): Promise<GhAuthProcess | null> {
+export async function startContainerGhAuth(): Promise<GhAuthProcess | null> {
   // Ensure the gh config directory exists
-  await mkdir(GH_CONFIG_DIR, { recursive: true });
-
-  const ghConfigPath = join(process.cwd(), GH_CONFIG_DIR);
+  await mkdir(ghConfigDir(), { recursive: true });
 
   const proc = Bun.spawn(
     [
@@ -213,8 +209,8 @@ export async function startContainerGhAuth(
       '-i', // Interactive but not TTY - we control the flow
       '--rm',
       '-v',
-      `${ghConfigPath}:/home/agent/.config/gh`,
-      dockerImage,
+      ghConfigVolume(),
+      HASHED_SANDBOX_DOCKER_IMAGE,
       'gh',
       'auth',
       'login',
@@ -267,21 +263,18 @@ export async function startContainerGhAuth(
   const codeMatch = stderrBuffer.match(
     /one-time code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})/i,
   );
+  const code = codeMatch?.[1] ?? '';
   const urlMatch = stderrBuffer.match(
     /(https:\/\/github\.com\/login\/device)/i,
   );
+  const url = urlMatch?.[1] ?? '';
 
-  if (!codeMatch || !urlMatch) {
+  if (!code || !url) {
     // Failed to parse, kill the process
     stderrReader.releaseLock();
     proc.kill();
     return null;
   }
-
-  const deviceCode: GhDeviceCodeInfo = {
-    code: codeMatch[1] ?? '',
-    url: urlMatch[1] ?? '',
-  };
 
   // Continue draining stderr in background (don't await)
   // This prevents the process from blocking on write
@@ -302,7 +295,8 @@ export async function startContainerGhAuth(
   const stdoutDrainPromise = drainStream(proc.stdout);
 
   return {
-    deviceCode,
+    code,
+    url,
     waitForCompletion: async () => {
       const exitCode = await proc.exited;
       // Wait for streams to finish draining
@@ -312,9 +306,10 @@ export async function startContainerGhAuth(
         return false;
       }
       // Set restrictive permissions on the hosts file
-      const hostsFile = Bun.file(GH_HOSTS_FILE);
+      const file = join(ghConfigDir(), GH_HOSTS_FILENAME);
+      const hostsFile = Bun.file(file);
       if (await hostsFile.exists()) {
-        await Bun.$`chmod 600 ${GH_HOSTS_FILE}`.quiet();
+        await chmod(file, 0o600);
       }
       return await hasLocalGhAuth();
     },
@@ -360,18 +355,4 @@ export async function tryHostGhAuth(): Promise<GhAuthResult | null> {
 
   // Need container-based auth
   return null;
-}
-
-/**
- * Get the path to the gh config directory for mounting in containers
- */
-export function getGhConfigPath(): string {
-  return join(process.cwd(), GH_CONFIG_DIR);
-}
-
-/**
- * Get the path to the gh config directory relative to cwd
- */
-export function getGhConfigDir(): string {
-  return GH_CONFIG_DIR;
 }

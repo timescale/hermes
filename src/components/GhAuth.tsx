@@ -2,11 +2,15 @@
 // GitHub Authentication TUI Component
 // ============================================================================
 
-import { useKeyboard } from '@opentui/react';
+import { createCliRenderer } from '@opentui/core';
+import { createRoot, useKeyboard } from '@opentui/react';
 import open from 'open';
 import { useEffect, useState } from 'react';
+import { startContainerGhAuth, tryHostGhAuth } from '../services/auth';
 import { copyToClipboard } from '../services/clipboard';
 import { log } from '../services/logger';
+import { restoreConsole } from '../utils';
+import { CopyOnSelect } from './CopyOnSelect';
 import { Dots } from './Dots';
 import { Frame } from './Frame';
 
@@ -19,16 +23,16 @@ export type GhAuthStatus =
 export interface GhAuthProps {
   code: string;
   url: string;
-  onComplete: (status: GhAuthStatus) => void;
+  onCancel: () => void;
 }
 
-export function GhAuth({ code, url, onComplete }: GhAuthProps) {
+export function GhAuth({ code, url, onCancel }: GhAuthProps) {
   const [copied, setCopied] = useState(false);
   const [opened, setOpened] = useState(false);
 
   useKeyboard((key) => {
     if (key.name === 'escape') {
-      onComplete({ type: 'cancelled' });
+      onCancel();
     }
   });
 
@@ -75,3 +79,51 @@ export function GhAuth({ code, url, onComplete }: GhAuthProps) {
     </Frame>
   );
 }
+
+/**
+ * Run the GitHub auth setup screen as a standalone TUI.
+ * This is used by commands like `branch` that need to ensure creds are available
+ * but aren't part of a larger wizard flow.
+ *
+ * @returns Promise that resolves with the setup result
+ */
+export const runGhAuthScreen = async (): Promise<boolean> => {
+  const authProcess = await startContainerGhAuth();
+  if (!authProcess) {
+    log.error('Failed to start GitHub auth process');
+    return false;
+  }
+
+  const renderer = await createCliRenderer({ exitOnCtrlC: true });
+  const root = createRoot(renderer);
+
+  root.render(
+    <CopyOnSelect>
+      <GhAuth
+        code={authProcess.code}
+        url={authProcess.url}
+        onCancel={() => {
+          authProcess.cancel();
+        }}
+      />
+    </CopyOnSelect>,
+  );
+
+  const result = await authProcess.waitForCompletion();
+
+  await renderer.idle();
+  renderer.destroy();
+  restoreConsole();
+
+  return result;
+};
+
+export const ensureGhAuth = async (): Promise<void> => {
+  const existingAuth = await tryHostGhAuth();
+  if (existingAuth?.success) return;
+
+  const success = await runGhAuthScreen();
+  if (!success) {
+    throw new Error('GitHub authentication failed or was cancelled');
+  }
+};

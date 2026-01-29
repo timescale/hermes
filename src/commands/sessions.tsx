@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConfigWizard, type ConfigWizardResult } from '../commands/config.tsx';
 import { CopyOnSelect } from '../components/CopyOnSelect';
 import { DockerSetup, type DockerSetupResult } from '../components/DockerSetup';
+import { ensureGhAuth } from '../components/GhAuth.tsx';
 import { PromptScreen, type SubmitMode } from '../components/PromptScreen';
 import { SessionDetail } from '../components/SessionDetail';
 import { SessionsList } from '../components/SessionsList';
@@ -541,6 +542,7 @@ export async function runSessionsTui({
   dbFork,
 }: RunSessionsTuiOptions = {}): Promise<void> {
   await ensureDockerSandbox();
+  await ensureGhAuth();
 
   let resolveResult: (result: SessionsResult) => void;
   const resultPromise = new Promise<SessionsResult>((resolve) => {

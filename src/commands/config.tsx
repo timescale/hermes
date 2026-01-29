@@ -25,7 +25,6 @@ import {
   readConfig,
   writeConfig,
 } from '../services/config';
-import { HASHED_SANDBOX_DOCKER_IMAGE } from '../services/docker';
 import {
   checkOpencodeCredentials,
   runOpencodeInDocker,
@@ -167,8 +166,7 @@ export function ConfigWizard({
 
       // Need to do container-based auth
       // Docker image is already ensured by the DockerSetup step
-      const dockerImage = HASHED_SANDBOX_DOCKER_IMAGE;
-      const authProcess = await startContainerGhAuth(dockerImage);
+      const authProcess = await startContainerGhAuth();
 
       if (cancelled) {
         authProcess?.cancel();
@@ -441,14 +439,11 @@ export function ConfigWizard({
   if (step === 'gh-auth' && ghAuthProcess) {
     return (
       <GhAuth
-        code={ghAuthProcess.deviceCode.code}
-        url={ghAuthProcess.deviceCode.url}
-        onComplete={(status) => {
-          if (status.type === 'cancelled') {
-            ghAuthProcess.cancel();
-            onComplete({ type: 'cancelled' });
-          }
-          // Success/error handled by the waitForCompletion effect
+        code={ghAuthProcess.code}
+        url={ghAuthProcess.url}
+        onCancel={() => {
+          ghAuthProcess.cancel();
+          onComplete({ type: 'cancelled' });
         }}
       />
     );

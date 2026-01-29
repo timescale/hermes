@@ -2,7 +2,6 @@
 // Docker Container Service
 // ============================================================================
 
-import { join } from 'node:path';
 import { dockerIsRunning } from 'build-strap';
 import { $ } from 'bun';
 import { nanoid } from 'nanoid';
@@ -11,6 +10,7 @@ import packageJson from '../../package.json' with { type: 'json' };
 import SANDBOX_DOCKERFILE from '../../sandbox/Dockerfile' with { type: 'text' };
 import { runDockerSetupScreen } from '../components/DockerSetup';
 import { formatShellError, type ShellError } from '../utils';
+import { ghConfigVolume } from './auth';
 import { CLAUDE_CONFIG_VOLUME } from './claude';
 import type { AgentType } from './config';
 import type { RepoInfo } from './git';
@@ -31,6 +31,9 @@ const dockerfileHash = hasher.digest('hex').slice(0, 12);
 function base64Encode(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64');
 }
+
+const toVolumeArgs = (volumes: string[]): string[] =>
+  volumes.flatMap((v) => ['-v', v]);
 
 const escapePrompt = (cmd: string, prompt?: string | null): string =>
   prompt
@@ -193,29 +196,6 @@ export async function ensureDockerImage(
   await buildDockerImage(cacheImage);
 
   onProgress?.({ type: 'done' });
-}
-
-// ============================================================================
-// Container Management
-// ============================================================================
-
-export type { AgentType } from './config';
-
-// ============================================================================
-// Volume Mount Helpers
-// ============================================================================
-
-/**
- * Get volume mount args for gh credentials if they exist in .hermes/gh/
- * Returns array of docker args like ['-v', '/path:/container/path']
- */
-async function getGhCredentialsMountArgs(): Promise<string[]> {
-  const ghConfigDir = join(process.cwd(), '.hermes', 'gh');
-  const ghHostsFile = Bun.file(join(ghConfigDir, 'hosts.yml'));
-  if (await ghHostsFile.exists()) {
-    return ['-v', `${ghConfigDir}:/home/agent/.config/gh`];
-  }
-  return [];
 }
 
 // ============================================================================
@@ -567,15 +547,11 @@ export async function resumeSession(
   }
 
   // Mount config volumes for agent credentials and session continuity
-  const volumeArgs: string[] = [
-    '-v',
+  const volumeArgs = toVolumeArgs([
     CLAUDE_CONFIG_VOLUME,
-    '-v',
     OPENCODE_CONFIG_VOLUME,
-  ];
-
-  // Mount gh credentials from .hermes/gh if they exist (for fresh auth)
-  volumeArgs.push(...(await getGhCredentialsMountArgs()));
+    ghConfigVolume(),
+  ]);
 
   const baseName = container.Name.replace(/\//g, '').trim();
   const containerName = `${baseName}-resumed-${resumeSuffix}`;
@@ -776,15 +752,11 @@ export async function startContainer(
     envArgs.push('-e', `${key}=${value}`);
   }
 
-  const volumeArgs: string[] = [
-    '-v',
+  const volumeArgs = toVolumeArgs([
     CLAUDE_CONFIG_VOLUME,
-    '-v',
     OPENCODE_CONFIG_VOLUME,
-  ];
-
-  // Mount gh credentials from .hermes/gh if they exist
-  volumeArgs.push(...(await getGhCredentialsMountArgs()));
+    ghConfigVolume(),
+  ]);
 
   // Build the agent command based on the selected agent type, model, and mode
   const modelArg = model ? ` --model ${model}` : '';
@@ -925,15 +897,11 @@ export async function startShellContainer(
     }
   }
 
-  const volumeArgs: string[] = [
-    '-v',
+  const volumeArgs = toVolumeArgs([
     CLAUDE_CONFIG_VOLUME,
-    '-v',
     OPENCODE_CONFIG_VOLUME,
-  ];
-
-  // Mount gh credentials from .hermes/gh if they exist
-  volumeArgs.push(...(await getGhCredentialsMountArgs()));
+    ghConfigVolume(),
+  ]);
 
   // Shell startup script: clone repo to default branch and drop into bash
   const startupScript = `

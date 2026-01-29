@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { Command } from 'commander';
-import { hasLocalGhAuth } from '../services/auth';
+import { ensureGhAuth } from '../components/GhAuth.tsx';
 import { type AgentType, readConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
 import { ensureDockerSandbox, startContainer } from '../services/docker';
@@ -58,6 +58,7 @@ export async function branchAction(
   }
 
   await ensureDockerSandbox();
+  await ensureGhAuth();
 
   // Step 1: Get repo info
   console.log('Getting repository info...');
@@ -102,14 +103,6 @@ export async function branchAction(
     console.log('Forking database (this may take a few minutes)...');
     forkResult = await forkDatabase(branchName, effectiveServiceId);
     console.log(`  Database fork created: ${forkResult.name}`);
-  }
-
-  // Step 8: Ensure GitHub auth is configured
-  if (!(await hasLocalGhAuth())) {
-    console.error(
-      'Error: GitHub authentication not configured.\nRun `hermes config` to set up authentication.',
-    );
-    process.exit(1);
   }
 
   // Step 9: Start container (repo will be cloned inside container)

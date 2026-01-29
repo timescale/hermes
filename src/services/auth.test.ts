@@ -1,15 +1,21 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from 'bun:test';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { getGhConfigDir, getGhConfigPath, hasLocalGhAuth } from './auth';
+import { hasLocalGhAuth } from './auth';
 
-describe('auth service', () => {
+describe('auth service', async () => {
   const testDir = '.hermes-auth-test';
   const originalCwd = process.cwd();
-  let testPath: string;
+  const testPath = join(originalCwd, testDir);
 
   beforeEach(async () => {
-    testPath = join(originalCwd, testDir);
     await mkdir(testPath, { recursive: true });
     process.chdir(testPath);
   });
@@ -21,6 +27,10 @@ describe('auth service', () => {
     } catch {
       // Ignore cleanup errors
     }
+  });
+
+  afterAll(() => {
+    process.chdir(originalCwd);
   });
 
   describe('hasLocalGhAuth', () => {
@@ -110,25 +120,6 @@ github.com:
 
       const result = await hasLocalGhAuth();
       expect(result).toBe(false);
-    });
-  });
-
-  describe('getGhConfigPath', () => {
-    test('returns absolute path to gh config directory', () => {
-      const path = getGhConfigPath();
-      expect(path).toBe(join(process.cwd(), '.hermes', 'gh'));
-    });
-
-    test('path includes current working directory', () => {
-      const path = getGhConfigPath();
-      expect(path.startsWith(process.cwd())).toBe(true);
-    });
-  });
-
-  describe('getGhConfigDir', () => {
-    test('returns relative path to gh config directory', () => {
-      const dir = getGhConfigDir();
-      expect(dir).toBe('.hermes/gh');
     });
   });
 });
