@@ -3,9 +3,9 @@
 // ============================================================================
 
 import { useKeyboard } from '@opentui/react';
-import clipboardy from 'clipboardy';
 import open from 'open';
 import { useEffect, useRef, useState } from 'react';
+import { copyToClipboard } from '../services/clipboard';
 import { log } from '../services/logger';
 import { Frame } from './Frame';
 
@@ -35,13 +35,16 @@ export function GhAuth({ code, url, onComplete }: GhAuthProps) {
 
   // Copy code to clipboard and open URL in browser on mount
   useEffect(() => {
-    clipboardy
-      .write(code)
+    copyToClipboard(code)
       .then(() => setCopied(true))
-      .catch((err) => log.debug({ err }, 'Failed to copy code to clipboard'));
+      .catch((err: unknown) =>
+        log.debug({ err }, 'Failed to copy code to clipboard'),
+      );
     open(url)
       .then(() => setOpened(true))
-      .catch((err) => log.debug({ err }, 'Failed to open URL in browser'));
+      .catch((err: unknown) =>
+        log.debug({ err }, 'Failed to open URL in browser'),
+      );
   }, [code, url]);
 
   useEffect(() => {

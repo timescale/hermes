@@ -7,6 +7,7 @@ import { createRoot } from '@opentui/react';
 import { Command } from 'commander';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConfigWizard, type ConfigWizardResult } from '../commands/config.tsx';
+import { CopyOnSelect } from '../components/CopyOnSelect';
 import { DockerSetup, type DockerSetupResult } from '../components/DockerSetup';
 import { PromptScreen, type SubmitMode } from '../components/PromptScreen';
 import { SessionDetail } from '../components/SessionDetail';
@@ -534,15 +535,17 @@ export async function runSessionsTui(
   const root = createRoot(renderer);
 
   root.render(
-    <SessionsApp
-      initialView={initialView}
-      initialPrompt={initialPrompt}
-      initialAgent={initialAgent}
-      initialModel={initialModel}
-      serviceId={serviceId}
-      dbFork={dbFork}
-      onComplete={(result) => resolveResult(result)}
-    />,
+    <CopyOnSelect>
+      <SessionsApp
+        initialView={initialView}
+        initialPrompt={initialPrompt}
+        initialAgent={initialAgent}
+        initialModel={initialModel}
+        serviceId={serviceId}
+        dbFork={dbFork}
+        onComplete={(result) => resolveResult(result)}
+      />
+    </CopyOnSelect>,
   );
 
   const result = await resultPromise;

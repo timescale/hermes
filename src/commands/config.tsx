@@ -6,6 +6,7 @@ import { createCliRenderer, type SelectOption } from '@opentui/core';
 import { createRoot } from '@opentui/react';
 import { Command } from 'commander';
 import { useEffect, useMemo, useState } from 'react';
+import { CopyOnSelect } from '../components/CopyOnSelect';
 import { DockerSetup } from '../components/DockerSetup';
 import { FilterableSelector } from '../components/FilterableSelector';
 import { GhAuth } from '../components/GhAuth';
@@ -475,11 +476,13 @@ export async function configAction(): Promise<void> {
     const root = createRoot(renderer);
 
     root.render(
-      <ConfigWizard
-        onComplete={(result) => resolveWizard(result)}
-        initialConfig={currentConfig}
-        skipToStep={skipToStep}
-      />,
+      <CopyOnSelect>
+        <ConfigWizard
+          onComplete={(result) => resolveWizard(result)}
+          initialConfig={currentConfig}
+          skipToStep={skipToStep}
+        />
+      </CopyOnSelect>,
     );
 
     const result = await wizardPromise;

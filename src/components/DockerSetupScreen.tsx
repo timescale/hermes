@@ -5,6 +5,7 @@
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
 import { restoreConsole } from '../utils';
+import { CopyOnSelect } from './CopyOnSelect';
 import { DockerSetup, type DockerSetupResult } from './DockerSetup';
 
 /**
@@ -28,10 +29,12 @@ export async function runDockerSetupScreen(): Promise<DockerSetupResult> {
   const root = createRoot(renderer);
 
   root.render(
-    <DockerSetup
-      title="Docker Setup"
-      onComplete={(result) => resolveSetup(result)}
-    />,
+    <CopyOnSelect>
+      <DockerSetup
+        title="Docker Setup"
+        onComplete={(result) => resolveSetup(result)}
+      />
+    </CopyOnSelect>,
   );
 
   const result = await setupPromise;
