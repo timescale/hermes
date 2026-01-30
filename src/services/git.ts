@@ -5,7 +5,9 @@
 import { nanoid } from 'nanoid';
 import { formatShellError, type ShellError } from '../utils';
 import { runClaudeInDocker } from './claude';
+import type { AgentType } from './config';
 import { log } from './logger';
+import { runOpencodeInDocker } from './opencode';
 
 export interface RepoInfo {
   owner: string;
@@ -128,11 +130,32 @@ async function getExistingContainers(): Promise<string[]> {
   }
 }
 
+export interface GenerateBranchNameOptions {
+  prompt: string;
+  agent?: AgentType;
+  model?: string;
+  onProgress?: (message: string) => void;
+  maxRetries?: number;
+}
+
 export async function generateBranchName(
-  prompt: string,
+  promptOrOptions: string | GenerateBranchNameOptions,
   onProgress?: (message: string) => void,
   maxRetries: number = 3,
 ): Promise<string> {
+  // Support both old signature (prompt, onProgress, maxRetries) and new options object
+  const options: GenerateBranchNameOptions =
+    typeof promptOrOptions === 'string'
+      ? { prompt: promptOrOptions, onProgress, maxRetries }
+      : promptOrOptions;
+
+  const {
+    prompt,
+    agent = 'claude',
+    model,
+    onProgress: progressCallback = onProgress,
+    maxRetries: retries = maxRetries,
+  } = options;
   // Gather all existing names to avoid conflicts
   const [existingBranches, existingServices, existingContainers] =
     await Promise.all([
@@ -149,8 +172,11 @@ export async function generateBranchName(
 
   let lastAttempt = '';
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    let claudePrompt = `Generate a git branch name for the following task:
+  // Determine effective model - use fastest model for branch name generation if not specified
+  const effectiveModel = model ?? (agent === 'claude' ? 'haiku' : undefined);
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    let llmPrompt = `Generate a git branch name for the following task:
 
 <task>
 \`\`\`markdown
@@ -167,23 +193,33 @@ Requirements:
 CRITICAL: Output ONLY the branch name, nothing else`;
 
     if (allExistingNames.size > 0) {
-      claudePrompt += `\n\nIMPORTANT: Do NOT use any of these names (they already exist):
+      llmPrompt += `\n\nIMPORTANT: Do NOT use any of these names (they already exist):
 ${[...allExistingNames].join(', ')}`;
     }
 
     if (lastAttempt) {
-      claudePrompt += `\n\nThe name '${lastAttempt}' is invalid. Suggest a different name.`;
+      llmPrompt += `\n\nThe name '${lastAttempt}' is invalid. Suggest a different name.`;
     }
 
     let result: string;
     try {
-      const proc = await runClaudeInDocker({
-        cmdArgs: ['--model', 'haiku', '-p', claudePrompt],
-      });
-      result = proc.text();
+      if (agent === 'claude') {
+        const cmdArgs = effectiveModel
+          ? ['--model', effectiveModel, '-p', llmPrompt]
+          : ['-p', llmPrompt];
+        const proc = await runClaudeInDocker({ cmdArgs });
+        result = proc.text();
+      } else {
+        // opencode
+        const cmdArgs = effectiveModel
+          ? ['run', '--model', effectiveModel, llmPrompt]
+          : ['run', llmPrompt];
+        const proc = await runOpencodeInDocker({ cmdArgs });
+        result = proc.text();
+      }
     } catch (err) {
-      log.error({ err }, 'Failed to generate branch name with Claude');
-      onProgress?.('Failed to generate branch name with Claude');
+      log.error({ err, agent }, 'Failed to generate branch name');
+      progressCallback?.(`Failed to generate branch name with ${agent}`);
       break;
     }
     const branchName = result.trim().toLowerCase();
@@ -193,13 +229,13 @@ ${[...allExistingNames].join(', ')}`;
 
     const [isValid, reason] = isValidBranchName(cleaned);
     if (!isValid) {
-      onProgress?.(`Attempt ${attempt} is invalid (${reason})`);
+      progressCallback?.(`Attempt ${attempt} is invalid (${reason})`);
       lastAttempt = cleaned.slice(0, 100);
       continue;
     }
 
     if (allExistingNames.has(cleaned)) {
-      onProgress?.(`Attempt ${attempt}: '${cleaned}' already exists`);
+      progressCallback?.(`Attempt ${attempt}: '${cleaned}' already exists`);
       lastAttempt = cleaned;
       allExistingNames.add(cleaned); // Add to set to avoid suggesting again
       continue;
@@ -208,7 +244,9 @@ ${[...allExistingNames].join(', ')}`;
     return cleaned;
   }
 
-  onProgress?.('Failed to generate a valid branch name, using a random name.');
+  progressCallback?.(
+    'Failed to generate a valid branch name, using a random name.',
+  );
   // Fallback: use a generic name with random suffix
   let fallbackName: string;
   do {
