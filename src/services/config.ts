@@ -33,9 +33,6 @@ export interface UserConfig {
   themeName?: string;
 }
 
-/** @deprecated Use ProjectConfig or UserConfig instead */
-export type HermesConfig = ProjectConfig & UserConfig;
-
 // ============================================================================
 // Config Store Factory
 // ============================================================================
@@ -144,44 +141,3 @@ export const userConfig = createConfigStore<UserConfig>({
 # https://github.com/timescale/hermes
 `,
 });
-
-// ============================================================================
-// Legacy API (Deprecated)
-// ============================================================================
-
-/**
- * Read the .hermes/config.yml file from the current directory
- * Returns undefined if the file doesn't exist
- * @deprecated Use projectConfig.read() instead
- */
-export async function readConfig(): Promise<HermesConfig | undefined> {
-  return projectConfig.read();
-}
-
-/**
- * @deprecated Use projectConfig.readValue() instead
- */
-export const readConfigValue = async <K extends keyof ProjectConfig>(
-  key: K,
-): Promise<ProjectConfig[K] | undefined> => {
-  return projectConfig.readValue(key);
-};
-
-/**
- * Write the .hermes/config.yml file to the current directory
- * Creates the .hermes directory if it doesn't exist
- * @deprecated Use projectConfig.write() instead
- */
-export async function writeConfig(config: HermesConfig): Promise<void> {
-  return projectConfig.write(config);
-}
-
-/**
- * @deprecated Use projectConfig.writeValue() instead
- */
-export const writeConfigValue = async <K extends keyof ProjectConfig>(
-  key: K,
-  value: ProjectConfig[K],
-): Promise<void> => {
-  return projectConfig.writeValue(key, value);
-};

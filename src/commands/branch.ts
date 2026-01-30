@@ -4,7 +4,7 @@
 
 import { Command } from 'commander';
 import { ensureGhAuth } from '../components/GhAuth.tsx';
-import { type AgentType, readConfig } from '../services/config';
+import { type AgentType, projectConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
 import { ensureDockerSandbox, startContainer } from '../services/docker';
 import {
@@ -74,12 +74,12 @@ export async function branchAction(
   await ensureGitignore();
 
   // Step 4: Read config for defaults, run config wizard if no config exists
-  let config = await readConfig();
+  let config = await projectConfig.read();
   if (!config) {
     console.log('No config found. Running config wizard...\n');
     await configAction();
     // Re-read config after config wizard
-    config = await readConfig();
+    config = await projectConfig.read();
     if (!config) {
       console.error('Config was cancelled or failed. Cannot continue.');
       process.exit(1);

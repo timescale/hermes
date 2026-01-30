@@ -20,9 +20,8 @@ import {
 import { checkClaudeCredentials, runClaudeInDocker } from '../services/claude';
 import {
   type AgentType,
-  type HermesConfig,
-  readConfig,
-  writeConfig,
+  type ProjectConfig,
+  projectConfig,
 } from '../services/config';
 import {
   checkOpencodeCredentials,
@@ -37,9 +36,9 @@ import { ensureGitignore } from '../utils';
 // ============================================================================
 
 export type ConfigWizardResult =
-  | { type: 'completed'; config: HermesConfig }
-  | { type: 'needs-agent-auth'; config: HermesConfig; agent: AgentType }
-  | { type: 'needs-opencode-provider'; config: HermesConfig }
+  | { type: 'completed'; config: ProjectConfig }
+  | { type: 'needs-agent-auth'; config: ProjectConfig; agent: AgentType }
+  | { type: 'needs-opencode-provider'; config: ProjectConfig }
   | { type: 'cancelled' }
   | { type: 'error'; message: string };
 
@@ -49,7 +48,7 @@ export type ConfigWizardResult =
 
 export interface ConfigWizardProps {
   onComplete: (result: ConfigWizardResult) => void;
-  initialConfig?: HermesConfig;
+  initialConfig?: ProjectConfig;
   skipToStep?: 'model' | 'agent-auth-check' | 'gh-auth-check';
 }
 
@@ -59,7 +58,7 @@ export function ConfigWizard({
   skipToStep,
 }: ConfigWizardProps) {
   // Create all promises immediately (only once via useMemo)
-  const configPromise = useMemo(() => readConfig(), []);
+  const configPromise = useMemo(() => projectConfig.read(), []);
   const servicesPromise = useMemo(() => listServices(), []);
 
   const [step, setStep] = useState<
@@ -71,7 +70,7 @@ export function ConfigWizard({
     | 'gh-auth-check'
     | 'gh-auth'
   >(skipToStep ?? 'docker');
-  const [config, setConfig] = useState<HermesConfig | null>(
+  const [config, setConfig] = useState<ProjectConfig | null>(
     initialConfig ?? null,
   );
 
@@ -457,7 +456,7 @@ export function ConfigWizard({
 // ============================================================================
 
 export async function configAction(): Promise<void> {
-  let currentConfig: HermesConfig | undefined;
+  let currentConfig: ProjectConfig | undefined;
   let skipToStep: 'model' | 'agent-auth-check' | 'gh-auth-check' | undefined;
 
   // Loop to handle interactive login flows that require exiting and re-entering the wizard
@@ -547,7 +546,7 @@ export async function configAction(): Promise<void> {
     // Ensure .gitignore has .hermes/ entry
     await ensureGitignore();
 
-    await writeConfig(config);
+    await projectConfig.write(config);
 
     console.log('\nConfiguration saved to .hermes/config.yml');
     console.log('\nSummary:');

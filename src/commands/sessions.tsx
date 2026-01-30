@@ -17,9 +17,8 @@ import { Toast, type ToastType } from '../components/Toast';
 import { hasLocalGhAuth } from '../services/auth';
 import {
   type AgentType,
-  type HermesConfig,
-  readConfig,
-  writeConfig,
+  type ProjectConfig,
+  projectConfig,
 } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
 import {
@@ -114,12 +113,12 @@ function SessionsApp({
   onComplete,
 }: SessionsAppProps) {
   const [view, setView] = useState<SessionsView>({ type: 'init' });
-  const [config, setConfig] = useState<HermesConfig | null>(null);
+  const [config, setConfig] = useState<ProjectConfig | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
 
   // Use refs to store props/config that we need in async functions
   // This avoids dependency issues with useCallback/useEffect
-  const configRef = useRef<HermesConfig | null>(null);
+  const configRef = useRef<ProjectConfig | null>(null);
   const propsRef = useRef({
     initialView,
     initialPrompt,
@@ -271,7 +270,7 @@ function SessionsApp({
       }
 
       // Docker is ready, now check config
-      const existingConfig = await readConfig();
+      const existingConfig = await projectConfig.read();
       if (!existingConfig) {
         setView({ type: 'config' });
         return;
@@ -321,7 +320,7 @@ function SessionsApp({
 
       // Save config
       await ensureGitignore();
-      await writeConfig(result.config);
+      await projectConfig.write(result.config);
       setConfig(result.config);
 
       // Go to target view
@@ -492,7 +491,6 @@ function SessionsApp({
         <SessionDetail
           session={view.session}
           onBack={() => setView({ type: 'list' })}
-          onQuit={() => onComplete({ type: 'quit' })}
           onAttach={(containerId) =>
             onComplete({ type: 'attach', containerId })
           }
