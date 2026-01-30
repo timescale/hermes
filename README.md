@@ -6,17 +6,10 @@ A CLI tool to run AI coding agents in isolated sandboxes per task.
 
 ### Quick Install (Recommended)
 
-Requires the [GitHub CLI](https://cli.github.com/) (`gh`) to be installed and authenticated:
-
-Install gh if you don't have it
+While this project remains internal, and the repo remains private, installation requires the [GitHub CLI](https://cli.github.com/) (`gh`) to be installed and authenticated:
 
 ```bash
 brew install gh
-```
-
-Authenticate with GitHub (if not already)
-
-```bash
 gh auth login
 ```
 
