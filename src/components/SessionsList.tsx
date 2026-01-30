@@ -3,6 +3,7 @@ import { flushSync, useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type HermesSession, listHermesSessions } from '../services/docker';
 import { log } from '../services/logger';
+import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
 import { Frame } from './Frame';
 import { HotkeysBar } from './HotkeysBar';
@@ -78,11 +79,11 @@ export function SessionsList({
   onNewTask,
 }: SessionsListProps) {
   const { theme } = useTheme();
+  const { selectedSessionId, setSelectedSessionId } = useSessionStore();
   const [sessions, setSessions] = useState<HermesSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterText, setFilterText] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const [toast, setToast] = useState<ToastState | null>(null);
   const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 
@@ -110,6 +111,30 @@ export function SessionsList({
     return true;
   });
 
+  // Compute selected index from session ID
+  // If the selected session is in the filtered list, use its index
+  // Otherwise, fall back to 0 (first item)
+  const selectedIndex = (() => {
+    if (selectedSessionId) {
+      const index = filteredSessions.findIndex(
+        (s) => s.containerId === selectedSessionId,
+      );
+      if (index >= 0) return index;
+    }
+    return 0;
+  })();
+
+  // Helper to select by index (updates the store with session ID)
+  const selectByIndex = useCallback(
+    (index: number) => {
+      const session = filteredSessions[index];
+      if (session) {
+        setSelectedSessionId(session.containerId);
+      }
+    },
+    [filteredSessions, setSelectedSessionId],
+  );
+
   // Load sessions
   const loadSessions = useCallback(async () => {
     try {
@@ -134,12 +159,15 @@ export function SessionsList({
     return () => clearInterval(interval);
   }, [loadSessions]);
 
-  // Keep selected index in bounds
+  // Keep selected index in bounds (update store if current selection is out of bounds)
   useEffect(() => {
-    if (selectedIndex >= filteredSessions.length) {
-      setSelectedIndex(Math.max(0, filteredSessions.length - 1));
+    if (
+      filteredSessions.length > 0 &&
+      selectedIndex >= filteredSessions.length
+    ) {
+      selectByIndex(Math.max(0, filteredSessions.length - 1));
     }
-  }, [filteredSessions.length, selectedIndex]);
+  }, [filteredSessions.length, selectedIndex, selectByIndex]);
 
   // Scroll to keep selection visible
   const scrollToIndex = useCallback((index: number) => {
@@ -168,7 +196,7 @@ export function SessionsList({
 
     if (key.name === 'up' || (key.name === 'k' && key.ctrl)) {
       const newIndex = Math.max(0, selectedIndex - 1);
-      flushSync(() => setSelectedIndex(newIndex));
+      flushSync(() => selectByIndex(newIndex));
       scrollToIndex(newIndex);
       return;
     }
@@ -179,7 +207,7 @@ export function SessionsList({
       key.name === 'linefeed'
     ) {
       const newIndex = Math.min(filteredSessions.length - 1, selectedIndex + 1);
-      flushSync(() => setSelectedIndex(newIndex));
+      flushSync(() => selectByIndex(newIndex));
       scrollToIndex(newIndex);
       return;
     }
@@ -190,7 +218,8 @@ export function SessionsList({
       const nextMode = FILTER_ORDER[nextIdx];
       if (nextMode) {
         setFilterMode(nextMode);
-        setSelectedIndex(0);
+        // Don't reset selection when changing filter - the selectedIndex
+        // computation will handle finding the session or falling back to 0
       }
       return;
     }
@@ -210,14 +239,14 @@ export function SessionsList({
 
     if (key.name === 'backspace') {
       setFilterText((prev) => prev.slice(0, -1));
-      setSelectedIndex(0);
+      // Don't reset selection when changing filter text - preserve selection if possible
       return;
     }
 
     // Printable characters for filter
     if (key.raw && key.raw.length === 1 && key.raw.match(/[a-zA-Z0-9-_./]/)) {
       setFilterText((prev) => prev + key.raw);
-      setSelectedIndex(0);
+      // Don't reset selection when changing filter text - preserve selection if possible
     }
   });
 
