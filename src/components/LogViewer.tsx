@@ -1,5 +1,5 @@
 import type { ScrollBoxRenderable } from '@opentui/core';
-import { flushSync, useKeyboard } from '@opentui/react';
+import { useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type LogStream, streamContainerLogs } from '../services/docker';
 import { useTheme } from '../stores/themeStore';
@@ -18,12 +18,11 @@ export function LogViewer({
 }: LogViewerProps) {
   const { theme } = useTheme();
   const [lines, setLines] = useState<string[]>([]);
-  const [following, setFollowing] = useState(true);
   const [loading, setLoading] = useState(true);
   const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
   const streamRef = useRef<LogStream | null>(null);
 
-  // Scroll to bottom
+  // Scroll to bottom and re-enable sticky scroll
   const scrollToBottom = useCallback(() => {
     if (scrollboxRef.current) {
       const contentHeight = lines.length;
@@ -93,27 +92,20 @@ export function LogViewer({
     };
   }, [containerId, isInteractive, onError]);
 
-  // Auto-scroll when following and new lines arrive
-  useEffect(() => {
-    if (following) {
-      scrollToBottom();
-    }
-  }, [following, scrollToBottom]);
-
   // Keyboard navigation
+  // Note: stickyScroll handles auto-scroll behavior automatically.
+  // When user scrolls away from bottom, sticky scroll detaches.
+  // When user scrolls back to bottom (manually or via 'G'), it re-attaches.
   useKeyboard((key) => {
     if (key.name === 'up' || key.raw === 'k') {
-      flushSync(() => setFollowing(false));
       scrollBy(-1);
     } else if (key.name === 'down' || key.raw === 'j') {
       scrollBy(1);
     } else if (key.raw === 'g') {
-      flushSync(() => setFollowing(false));
       if (scrollboxRef.current) {
         scrollboxRef.current.scrollTo({ x: 0, y: 0 });
       }
     } else if (key.raw === 'G') {
-      flushSync(() => setFollowing(true));
       scrollToBottom();
     }
   });
@@ -147,7 +139,13 @@ export function LogViewer({
 
   return (
     <box flexDirection="column" flexGrow={1}>
-      <scrollbox ref={scrollboxRef} flexGrow={1} flexShrink={1}>
+      <scrollbox
+        ref={scrollboxRef}
+        flexGrow={1}
+        flexShrink={1}
+        stickyScroll
+        stickyStart="bottom"
+      >
         {lines.map((line, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: log lines are append-only with no stable ID
           <text key={i} wrapMode="word">
@@ -155,11 +153,6 @@ export function LogViewer({
           </text>
         ))}
       </scrollbox>
-      {following && (
-        <box position="absolute" bottom={0} right={1}>
-          <text fg={theme.success}>[F]</text>
-        </box>
-      )}
     </box>
   );
 }
