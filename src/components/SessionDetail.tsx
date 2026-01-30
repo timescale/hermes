@@ -7,6 +7,7 @@ import {
   stopContainer,
 } from '../services/docker';
 import { log } from '../services/logger';
+import { useTheme } from '../stores/themeStore';
 import { ConfirmModal } from './ConfirmModal';
 import { Frame } from './Frame';
 import { HotkeysBar } from './HotkeysBar';
@@ -50,21 +51,6 @@ function formatRelativeTime(isoDate: string): string {
   return 'just now';
 }
 
-function getStatusColor(status: HermesSession['status']): string {
-  switch (status) {
-    case 'running':
-      return '#51cf66';
-    case 'exited':
-      return '#868e96';
-    case 'paused':
-      return '#fcc419';
-    case 'dead':
-      return '#ff6b6b';
-    default:
-      return '#888888';
-  }
-}
-
 function getStatusIcon(session: HermesSession): string {
   switch (session.status) {
     case 'running':
@@ -95,6 +81,7 @@ export function SessionDetail({
   onResume,
   onSessionDeleted,
 }: SessionDetailProps) {
+  const { theme } = useTheme();
   const [session, setSession] = useState(initialSession);
   const [modal, setModal] = useState<ModalType>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -192,13 +179,21 @@ export function SessionDetail({
     }
   });
 
-  const statusColor = getStatusColor(session.status);
+  const statusColor =
+    {
+      created: theme.info,
+      exited: session.exitCode === 0 ? theme.text : theme.error,
+      restarting: theme.accent,
+      running: theme.success,
+      paused: theme.warning,
+      dead: theme.error,
+    }[session.status] || theme.textMuted;
   const statusIcon = getStatusIcon(session);
   const statusText = getStatusText(session);
   const agentDisplay = session.model
     ? `${session.agent} (${session.model})`
     : session.agent;
-  const metadataHeight = session.resumedFrom ? 5 : 4;
+  const metadataHeight = session.resumedFrom ? 3 : 2;
 
   // Build help text based on available actions
   const actions = [
@@ -221,43 +216,48 @@ export function SessionDetail({
   return (
     <Frame title={session.branch}>
       {/* Metadata section */}
-      <box height={metadataHeight} flexDirection="column" marginBottom={1}>
-        <box height={1} flexDirection="row">
-          <text height={1}>
-            Status:{' '}
-            <span fg={statusColor}>
-              {statusIcon} {statusText}
-            </span>
-          </text>
-          <text height={1} flexGrow={1} />
-          <text height={1}>
-            Created:{' '}
-            {session.created ? formatRelativeTime(session.created) : 'unknown'}
-          </text>
-        </box>
-        <box height={1} flexDirection="row">
-          <text height={1}>Repo: {session.repo}</text>
-          <text height={1} flexGrow={1} />
-          <text height={1}>Agent: {agentDisplay}</text>
-        </box>
-        <box height={1} flexDirection="row">
-          <text height={1}>Name: {session.name}</text>
-          <text height={1} flexGrow={1} />
-          <text height={1}>Branch: hermes/{session.branch}</text>
-        </box>
-        <box height={1} flexDirection="row">
-          <text height={1}>Container: {session.containerName}</text>
-        </box>
-        {session.resumedFrom && (
-          <box height={1} flexDirection="row">
-            <text height={1}>Resumed From: {session.resumedFrom}</text>
+      <box height={metadataHeight} flexDirection="row" marginBottom={1}>
+        <box flexDirection="column" flexGrow={1}>
+          <box flexDirection="row" gap={3}>
+            <text fg={theme.textMuted}>repo</text>
+            <text>{session.repo}</text>
           </box>
-        )}
+          <box flexDirection="row" gap={1}>
+            <text fg={theme.textMuted}>status</text>
+            <text fg={statusColor}>
+              {statusIcon} {statusText}
+            </text>
+          </box>
+          {session.resumedFrom && (
+            <box height={1} flexDirection="row" gap={1}>
+              <text fg={theme.textMuted}>resumed from</text>
+              <text>{session.resumedFrom}</text>
+            </box>
+          )}
+        </box>
+        <box
+          flexDirection="column"
+          flexGrow={1}
+          alignItems="flex-end"
+          paddingRight={1}
+        >
+          <box flexDirection="row" gap={1}>
+            <text fg={theme.textMuted}>created</text>
+            <text>
+              {session.created
+                ? formatRelativeTime(session.created)
+                : 'unknown'}
+            </text>
+          </box>
+          <box>
+            <text>{agentDisplay}</text>
+          </box>
+        </box>
       </box>
 
       {/* Prompt section */}
       <box title="Prompt" border borderStyle="single" height={3}>
-        <text fg="#cccccc" height={1} overflow="scroll">
+        <text fg={theme.text} height={1} overflow="scroll">
           {session.prompt || '(no prompt)'}
         </text>
       </box>
@@ -287,7 +287,7 @@ export function SessionDetail({
           message={`Are you sure you want to stop ${session.containerName}?`}
           detail="This will terminate the running agent session."
           confirmLabel="Stop"
-          confirmColor="#ff6b6b"
+          confirmColor={theme.warning}
           onConfirm={handleStop}
           onCancel={() => setModal(null)}
         />
@@ -299,7 +299,7 @@ export function SessionDetail({
           message={`Are you sure you want to delete ${session.containerName}?`}
           detail="This action cannot be undone."
           confirmLabel="Delete"
-          confirmColor="#ff6b6b"
+          confirmColor={theme.warning}
           onConfirm={handleDelete}
           onCancel={() => setModal(null)}
         />

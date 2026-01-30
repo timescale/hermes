@@ -1,11 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { HermesSession } from '../services/docker';
-import {
-  formatRelativeTime,
-  getStatusDisplay,
-  toYaml,
-  truncate,
-} from './sessions';
+import { formatRelativeTime, getStatusDisplay, truncate } from './sessions';
 
 describe('formatRelativeTime', () => {
   test('returns "just now" for very recent time', () => {
@@ -162,90 +157,5 @@ describe('truncate', () => {
 
   test('handles maxLen of 3 (minimum for ellipsis)', () => {
     expect(truncate('hello', 3)).toBe('...');
-  });
-});
-
-describe('toYaml', () => {
-  test('serializes null', () => {
-    expect(toYaml(null)).toBe('null');
-  });
-
-  test('serializes undefined', () => {
-    expect(toYaml(undefined)).toBe('null');
-  });
-
-  test('serializes string', () => {
-    expect(toYaml('hello')).toBe('hello');
-  });
-
-  test('serializes string with special characters', () => {
-    const result = toYaml('key: value');
-    expect(result).toContain('|-');
-  });
-
-  test('serializes multiline string', () => {
-    const result = toYaml('line1\nline2');
-    expect(result).toContain('|-');
-    expect(result).toContain('line1');
-    expect(result).toContain('line2');
-  });
-
-  test('serializes number', () => {
-    expect(toYaml(42)).toBe('42');
-  });
-
-  test('serializes boolean true', () => {
-    expect(toYaml(true)).toBe('true');
-  });
-
-  test('serializes boolean false', () => {
-    expect(toYaml(false)).toBe('false');
-  });
-
-  test('serializes empty array', () => {
-    expect(toYaml([])).toBe('[]');
-  });
-
-  test('serializes array of primitives', () => {
-    const result = toYaml(['a', 'b', 'c']);
-    expect(result).toContain('- a');
-    expect(result).toContain('- b');
-    expect(result).toContain('- c');
-  });
-
-  test('serializes empty object', () => {
-    expect(toYaml({})).toBe('{}');
-  });
-
-  test('serializes object with primitive values', () => {
-    const result = toYaml({ name: 'test', count: 5 });
-    expect(result).toContain('name: test');
-    expect(result).toContain('count: 5');
-  });
-
-  test('serializes nested object', () => {
-    const result = toYaml({ outer: { inner: 'value' } });
-    expect(result).toContain('outer:');
-    expect(result).toContain('inner: value');
-  });
-
-  test('serializes array of objects', () => {
-    const result = toYaml([{ name: 'first' }, { name: 'second' }]);
-    expect(result).toContain('- name: first');
-    expect(result).toContain('- name: second');
-  });
-
-  test('serializes complex session-like object', () => {
-    const session = {
-      name: 'test-session',
-      status: 'running',
-      agent: 'opencode',
-      exitCode: 0,
-    };
-    const result = toYaml(session);
-    expect(result).toContain('name: test-session');
-    expect(result).toContain('status: running');
-    expect(result).toContain('agent: opencode');
-    expect(result).toContain('exitCode: 0');
   });
 });

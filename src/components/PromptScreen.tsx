@@ -1,7 +1,11 @@
 import { homedir } from 'node:os';
-import type { MouseEvent, TextareaRenderable } from '@opentui/core';
+import type {
+  BoxRenderable,
+  MouseEvent,
+  TextareaRenderable,
+} from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
-import { useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import packageJson from '../../package.json' with { type: 'json' };
 import {
   AGENT_INFO_MAP,
@@ -15,11 +19,15 @@ import {
 import type { AgentType } from '../services/config';
 import type { HermesSession } from '../services/docker';
 import { log } from '../services/logger';
+import type { SlashCommand } from '../services/slashCommands.ts';
+import { useTheme } from '../stores/themeStore.ts';
 import { FilterableSelector } from './FilterableSelector';
 import { HermesTitle } from './HermesTitle';
 import { HotkeysBar } from './HotkeysBar';
 import { Modal } from './Modal';
 import { Selector } from './Selector';
+import { SlashCommandPopover } from './SlashCommandPopover.tsx';
+import { ThemePicker } from './ThemePicker.tsx';
 import { Toast, type ToastType } from './Toast';
 
 export type SubmitMode = 'async' | 'interactive';
@@ -81,7 +89,9 @@ export function PromptScreen({
   onShell,
   onViewSessions,
 }: PromptScreenProps) {
+  const { theme } = useTheme();
   const textareaRef = useRef<TextareaRenderable>(null);
+  const inputAnchorRef = useRef<BoxRenderable | null>(null);
   const [agent, setAgent] = useState<AgentType>(defaultAgent);
   const [modelId, setModelId] = useState<string | null>(defaultModel);
   const modelMem = useRef({
@@ -89,6 +99,9 @@ export function PromptScreen({
   });
   modelMem.current[agent] = modelId;
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [showThemePicker, setShowThemePicker] = useState(false);
+  const [showSlashCommands, setShowSlashCommands] = useState(false);
+  const [slashQuery, setSlashQuery] = useState('');
   const [toast, setToast] = useState<ToastState | null>(null);
   const [submitMode, setSubmitMode] = useState<SubmitMode>('async');
   const modelsMap = useAgentModels();
@@ -99,7 +112,7 @@ export function PromptScreen({
     (modelId && agent === 'opencode' ? openCodeIdToModel(modelId) : null);
 
   // Handle agent switch with model matching (disabled when resuming)
-  const switchAgent = () => {
+  const switchAgent = useCallback(() => {
     // Don't allow switching agents when resuming a session
     if (resumeSession) return;
 
@@ -114,7 +127,66 @@ export function PromptScreen({
         modelsMap[newAgent]?.[0]?.id ||
         null,
     );
-  };
+  }, [resumeSession, agent, defaultAgent, modelId, modelsMap]);
+
+  // Define available slash commands
+  const slashCommands: SlashCommand[] = useMemo(
+    () => [
+      {
+        name: 'agents',
+        description: 'Switch agent',
+        onSelect: () => {
+          setShowSlashCommands(false);
+          setSlashQuery('');
+          if (textareaRef.current) {
+            textareaRef.current.clear();
+          }
+          if (!resumeSession) {
+            switchAgent();
+          }
+        },
+      },
+      {
+        name: 'models',
+        description: 'Switch model',
+        onSelect: () => {
+          setShowSlashCommands(false);
+          setSlashQuery('');
+          if (textareaRef.current) {
+            textareaRef.current.clear();
+          }
+          if (currentModels?.length) {
+            setShowModelSelector(true);
+          }
+        },
+      },
+      {
+        name: 'theme',
+        description: 'Change UI theme',
+        onSelect: () => {
+          setShowSlashCommands(false);
+          setSlashQuery('');
+          if (textareaRef.current) {
+            textareaRef.current.clear();
+          }
+          setShowThemePicker(true);
+        },
+      },
+      {
+        name: 'sessions',
+        description: 'View sessions',
+        onSelect: () => {
+          setShowSlashCommands(false);
+          setSlashQuery('');
+          if (textareaRef.current) {
+            textareaRef.current.clear();
+          }
+          onViewSessions?.();
+        },
+      },
+    ],
+    [resumeSession, currentModels, onViewSessions, switchAgent],
+  );
 
   // Handle model selection from modal
   const handleModelSelect = (selectedModel: string | null) => {
@@ -125,8 +197,17 @@ export function PromptScreen({
     setShowModelSelector(false);
   };
 
+  // Track if slash commands are showing (for preventing submit)
+  const showSlashCommandsRef = useRef(false);
+  showSlashCommandsRef.current = showSlashCommands;
+
   // Handle submit
   const handleSubmitImpl = () => {
+    // Don't submit if slash commands popover is showing
+    if (showSlashCommandsRef.current) {
+      return;
+    }
+
     const promptText = textareaRef.current?.plainText.trim() || '';
 
     if (!promptText) {
@@ -152,10 +233,71 @@ export function PromptScreen({
   handleSubmitRef.current = handleSubmitImpl;
   const handleSubmit = () => handleSubmitRef.current();
 
+  // Handle slash command selection
+  const handleSlashCommandSelect = (command: SlashCommand) => {
+    command.onSelect();
+  };
+
+  const handleSlashCommandCancel = () => {
+    setShowSlashCommands(false);
+    setSlashQuery('');
+    // Clear the slash text from textarea
+    if (textareaRef.current) {
+      textareaRef.current.clear();
+    }
+  };
+
+  // Check if current textarea content is a slash command
+  const checkForSlashCommand = () => {
+    const text = textareaRef.current?.plainText || '';
+    if (text.startsWith('/')) {
+      const query = text.slice(1); // Remove the "/"
+      setSlashQuery(query);
+      if (!showSlashCommands) {
+        setShowSlashCommands(true);
+      }
+      return true;
+    }
+    if (showSlashCommands) {
+      setShowSlashCommands(false);
+      setSlashQuery('');
+    }
+    return false;
+  };
+
   // Keyboard handling (when modal not shown)
   useKeyboard((key) => {
     log.trace({ key }, 'Key pressed in PromptScreen');
-    if (showModelSelector) return;
+    if (showModelSelector || showThemePicker) return;
+
+    // If slash commands are showing, let the popover handle navigation
+    if (showSlashCommands) {
+      // Still check for text changes on printable keys
+      if (key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
+        // Defer check to after the character is typed
+        setTimeout(checkForSlashCommand, 0);
+      }
+      if (key.name === 'backspace') {
+        setTimeout(() => {
+          checkForSlashCommand();
+        }, 0);
+      }
+      return;
+    }
+
+    // Check for "/" key to start slash command
+    if (key.sequence === '/') {
+      const text = textareaRef.current?.plainText || '';
+      // Only trigger slash commands if textarea is empty or we're at the start
+      if (text === '' || text === '/') {
+        setTimeout(checkForSlashCommand, 0);
+      }
+    }
+
+    // Check after any key if we have slash text
+    if (key.name === 'backspace') {
+      setTimeout(checkForSlashCommand, 0);
+    }
 
     if (key.name === 'tab' && !resumeSession) {
       switchAgent();
@@ -183,6 +325,11 @@ export function PromptScreen({
       onShell();
       return;
     }
+
+    if (key.name === 't' && key.ctrl) {
+      setShowThemePicker(true);
+      return;
+    }
   });
 
   // Build model selector options
@@ -197,7 +344,7 @@ export function PromptScreen({
 
   return (
     <box
-      backgroundColor="#0A0A0A"
+      backgroundColor={theme.background}
       flexDirection="column"
       flexGrow={1}
       paddingLeft={2}
@@ -217,18 +364,20 @@ export function PromptScreen({
           {/* Resume indicator */}
           {resumeSession && (
             <box marginBottom={1}>
-              <text fg="#888888">{'Resuming: '}</text>
-              <text fg="#fcc419">{resumeSession.name}</text>
+              <text fg={theme.textMuted}>{'Resuming: '}</text>
+              <text fg={theme.warning}>{resumeSession.name}</text>
             </box>
           )}
+
           {/* Main input box */}
           <box
+            ref={inputAnchorRef}
             border={['left']}
             borderColor={agentInfo?.color}
             customBorderChars={{
               ...EmptyBorder,
-              vertical: '┃',
-              bottomLeft: '╹',
+              vertical: '\u2503',
+              bottomLeft: '\u2579',
             }}
           >
             <box
@@ -238,13 +387,13 @@ export function PromptScreen({
               paddingRight={2}
               flexShrink={0}
               flexGrow={1}
-              backgroundColor="#1E1E1E"
+              backgroundColor={theme.backgroundElement}
             >
               {/* Prompt textarea */}
               <textarea
                 ref={textareaRef}
-                focused={!showModelSelector}
-                placeholder='Ask anything... "Fix a TODO in the codebase"'
+                focused={!showModelSelector && !showThemePicker}
+                placeholder='Ask anything... Type "/" for commands'
                 onSubmit={handleSubmit}
                 onMouseDown={(r: MouseEvent) => r.target?.focus()}
                 keyBindings={[
@@ -253,10 +402,10 @@ export function PromptScreen({
                   { name: 'return', shift: true, action: 'newline' },
                   { name: 'return', action: 'submit' },
                 ]}
-                backgroundColor="#1E1E1E"
-                focusedBackgroundColor="#1E1E1E"
-                textColor="#fff"
-                focusedTextColor="#fff"
+                backgroundColor={theme.backgroundElement}
+                focusedBackgroundColor={theme.backgroundElement}
+                textColor={theme.text}
+                focusedTextColor={theme.text}
                 minHeight={1}
                 maxHeight={5}
               />
@@ -265,13 +414,13 @@ export function PromptScreen({
               <box flexDirection="row" marginTop={1} height={1} gap={1}>
                 <text fg={agentInfo?.color}>{agentInfo?.name || agent}</text>
                 {submitMode === 'interactive' ? (
-                  <text fg="#22c55e">[interactive]</text>
+                  <text fg={theme.success}>[interactive]</text>
                 ) : null}
-                <text fg="#aaaaaa">
+                <text fg={theme.textMuted}>
                   {model?.name || modelId || 'Loading...'}
                 </text>
                 {model?.description ? (
-                  <text fg="#666666">{model.description}</text>
+                  <text fg={theme.borderSubtle}>{model.description}</text>
                 ) : null}
               </box>
             </box>
@@ -283,16 +432,16 @@ export function PromptScreen({
             borderColor={agentInfo?.color}
             customBorderChars={{
               ...EmptyBorder,
-              vertical: '╹',
+              vertical: '\u2579',
             }}
           >
             <box
               height={1}
               border={['bottom']}
-              borderColor="#1E1E1E"
+              borderColor={theme.backgroundElement}
               customBorderChars={{
                 ...EmptyBorder,
-                horizontal: '▀',
+                horizontal: '\u2580',
               }}
             />
           </box>
@@ -309,10 +458,12 @@ export function PromptScreen({
       </box>
       <box height={1} flexDirection="row" width="100%">
         <box flexGrow={1}>
-          <text fg="#808080">{process.cwd().replace(homedir(), '~')}</text>
+          <text fg={theme.textMuted}>
+            {process.cwd().replace(homedir(), '~')}
+          </text>
         </box>
         <box alignItems="flex-end">
-          <text fg="#808080">{packageJson.version}</text>
+          <text fg={theme.textMuted}>{packageJson.version}</text>
         </box>
       </box>
       {/* Model selector modal */}
@@ -344,12 +495,35 @@ export function PromptScreen({
           )}
         </Modal>
       )}
+      {/* Theme picker modal */}
+      {showThemePicker && (
+        <Modal
+          title="Select Theme"
+          minWidth={50}
+          maxWidth={70}
+          onClose={() => setShowThemePicker(false)}
+        >
+          <ThemePicker onClose={() => setShowThemePicker(false)} />
+        </Modal>
+      )}
+
       {/* Toast notifications */}
       {toast && (
         <Toast
           message={toast.message}
           type={toast.type}
           onDismiss={() => setToast(null)}
+        />
+      )}
+
+      {/* Slash command popover - absolute positioned relative to input */}
+      {showSlashCommands && (
+        <SlashCommandPopover
+          query={slashQuery}
+          commands={slashCommands}
+          onSelect={handleSlashCommandSelect}
+          onCancel={handleSlashCommandCancel}
+          anchor={inputAnchorRef.current}
         />
       )}
     </box>

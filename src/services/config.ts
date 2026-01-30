@@ -23,6 +23,9 @@ export interface HermesConfig {
 
   // Default model to use for the selected agent
   model?: string;
+
+  // UI theme
+  themeName?: string;
 }
 
 /**
@@ -46,6 +49,13 @@ export async function readConfig(): Promise<HermesConfig | undefined> {
   return parsed as HermesConfig;
 }
 
+export const readConfigValue = async <K extends keyof HermesConfig>(
+  key: K,
+): Promise<HermesConfig[K] | undefined> => {
+  const config = await readConfig();
+  return config?.[key];
+};
+
 /**
  * Write the .hermes/config.yml file to the current directory
  * Creates the .hermes directory if it doesn't exist
@@ -63,3 +73,12 @@ ${YAML.stringify(config, null, 2)}
 `,
   );
 }
+
+export const writeConfigValue = async <K extends keyof HermesConfig>(
+  key: K,
+  value: HermesConfig[K],
+): Promise<void> => {
+  const config = (await readConfig()) || {};
+  config[key] = value;
+  await writeConfig(config);
+};

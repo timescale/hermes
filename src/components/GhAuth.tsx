@@ -2,14 +2,14 @@
 // GitHub Authentication TUI Component
 // ============================================================================
 
-import { createCliRenderer } from '@opentui/core';
-import { createRoot, useKeyboard } from '@opentui/react';
+import { useKeyboard } from '@opentui/react';
 import open from 'open';
 import { useEffect, useState } from 'react';
 import { startContainerGhAuth, tryHostGhAuth } from '../services/auth';
 import { copyToClipboard } from '../services/clipboard';
 import { log } from '../services/logger';
-import { restoreConsole } from '../utils';
+import { createTui } from '../services/tui';
+import { useTheme } from '../stores/themeStore';
 import { CopyOnSelect } from './CopyOnSelect';
 import { Dots } from './Dots';
 import { Frame } from './Frame';
@@ -27,6 +27,7 @@ export interface GhAuthProps {
 }
 
 export function GhAuth({ code, url, onCancel }: GhAuthProps) {
+  const { theme } = useTheme();
   const [copied, setCopied] = useState(false);
   const [opened, setOpened] = useState(false);
 
@@ -53,28 +54,28 @@ export function GhAuth({ code, url, onCancel }: GhAuthProps) {
   return (
     <Frame title="GitHub Authentication">
       <box flexDirection="column" alignItems="center">
-        <text fg="#888">
+        <text fg={theme.textMuted}>
           {opened
             ? 'Opening in your browser:'
             : 'Open this URL in your browser:'}
         </text>
-        <text fg="#6bf">{url}</text>
+        <text fg={theme.primary}>{url}</text>
 
         <box height={1} />
 
-        <text fg="#888">And enter this one-time code:</text>
-        <text fg="#0f0"> {code} </text>
-        {copied && <text fg="#555">(copied to clipboard)</text>}
+        <text fg={theme.textMuted}>And enter this one-time code:</text>
+        <text fg={theme.success}> {code} </text>
+        {copied && <text fg={theme.textMuted}>(copied to clipboard)</text>}
 
         <box height={2} />
 
-        <text fg="#888">
+        <text fg={theme.secondary}>
           Waiting for authentication
           <Dots />
         </text>
 
         <box height={1} />
-        <text fg="#555">Press Esc to cancel</text>
+        <text fg={theme.textMuted}>Press Esc to cancel</text>
       </box>
     </Frame>
   );
@@ -94,10 +95,9 @@ export const runGhAuthScreen = async (): Promise<boolean> => {
     return false;
   }
 
-  const renderer = await createCliRenderer({ exitOnCtrlC: true });
-  const root = createRoot(renderer);
+  const { render, destroy } = await createTui();
 
-  root.render(
+  render(
     <CopyOnSelect>
       <GhAuth
         code={authProcess.code}
@@ -111,9 +111,7 @@ export const runGhAuthScreen = async (): Promise<boolean> => {
 
   const result = await authProcess.waitForCompletion();
 
-  await renderer.idle();
-  renderer.destroy();
-  restoreConsole();
+  await destroy();
 
   return result;
 };

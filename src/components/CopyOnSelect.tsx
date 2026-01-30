@@ -6,6 +6,7 @@ import { useRenderer } from '@opentui/react';
 import { type ReactNode, useState } from 'react';
 import { copyToClipboard } from '../services/clipboard';
 import { log } from '../services/logger';
+import { useTheme } from '../stores/themeStore';
 import { Toast } from './Toast';
 
 export interface CopyOnSelectProps {
@@ -20,6 +21,7 @@ export interface CopyOnSelectProps {
 export function CopyOnSelect({ children }: CopyOnSelectProps) {
   const renderer = useRenderer();
   const [showToast, setShowToast] = useState(false);
+  const { theme } = useTheme();
 
   const handleMouseUp = async () => {
     const selection = renderer.getSelection();
@@ -36,7 +38,11 @@ export function CopyOnSelect({ children }: CopyOnSelectProps) {
   };
 
   return (
-    <box flexGrow={1} onMouseUp={handleMouseUp} backgroundColor="#0A0A0A">
+    <box
+      flexGrow={1}
+      onMouseUp={handleMouseUp}
+      backgroundColor={theme.background}
+    >
       {children}
       {showToast && (
         <Toast

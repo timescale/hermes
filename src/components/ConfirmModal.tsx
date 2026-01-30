@@ -1,3 +1,4 @@
+import { useTheme } from '../stores/themeStore';
 import { type Option, OptionsModal } from './OptionsModal';
 
 export interface ConfirmModalProps {
@@ -15,23 +16,24 @@ export function ConfirmModal({
   message,
   detail,
   confirmLabel,
-  confirmColor = '#51cf66',
+  confirmColor,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const { theme } = useTheme();
   const options: Option[] = [
     {
       key: 'enter',
       name: confirmLabel,
       description: 'remove the container',
       onSelect: onConfirm,
-      color: confirmColor,
+      color: confirmColor ?? theme.success,
     },
     {
       key: 'escape',
       name: 'Cancel',
       onSelect: onCancel,
-      color: '#888888',
+      color: theme.textMuted,
     },
   ];
   return (
@@ -44,7 +46,7 @@ export function ConfirmModal({
       onCancel={onCancel}
     >
       {detail && (
-        <text fg="#888888" marginTop={1} marginLeft={2} marginRight={2}>
+        <text fg={theme.textMuted} marginTop={1} marginLeft={2} marginRight={2}>
           {detail}
         </text>
       )}

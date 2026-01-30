@@ -2,8 +2,7 @@
 // Sessions Command - Unified TUI for hermes
 // ============================================================================
 
-import { createCliRenderer } from '@opentui/core';
-import { createRoot } from '@opentui/react';
+import { YAML } from 'bun';
 import { Command } from 'commander';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConfigWizard, type ConfigWizardResult } from '../commands/config.tsx';
@@ -37,7 +36,8 @@ import {
 } from '../services/docker';
 import { generateBranchName, getRepoInfo } from '../services/git';
 import { log } from '../services/logger';
-import { ensureGitignore, restoreConsole } from '../utils';
+import { createTui } from '../services/tui.ts';
+import { ensureGitignore } from '../utils';
 
 // ============================================================================
 // Types
@@ -549,10 +549,9 @@ export async function runSessionsTui({
     resolveResult = resolve;
   });
 
-  const renderer = await createCliRenderer({ exitOnCtrlC: true });
-  const root = createRoot(renderer);
+  const { render, destroy } = await createTui();
 
-  root.render(
+  render(
     <CopyOnSelect>
       <SessionsApp
         initialView={initialView}
@@ -568,9 +567,7 @@ export async function runSessionsTui({
 
   const result = await resultPromise;
 
-  await renderer.idle();
-  renderer.destroy();
-  restoreConsole();
+  await destroy();
 
   // Handle attach action - needs to happen after TUI cleanup
   if (result.type === 'attach' && result.containerId) {
@@ -734,49 +731,6 @@ function printTable(sessions: HermesSession[]): void {
   }
 }
 
-export function toYaml(data: unknown, indent = 0): string {
-  const prefix = '  '.repeat(indent);
-
-  if (data === null || data === undefined) {
-    return 'null';
-  }
-
-  if (typeof data === 'string') {
-    if (data.includes('\n') || data.includes(':') || data.includes('#')) {
-      const lines = data.split('\n');
-      return `|-\n${lines.map((l) => `${prefix}  ${l}`).join('\n')}`;
-    }
-    return data;
-  }
-
-  if (typeof data === 'number' || typeof data === 'boolean') {
-    return String(data);
-  }
-
-  if (Array.isArray(data)) {
-    if (data.length === 0) return '[]';
-    return data
-      .map((item) => `${prefix}- ${toYaml(item, indent + 1).trimStart()}`)
-      .join('\n');
-  }
-
-  if (typeof data === 'object') {
-    const entries = Object.entries(data);
-    if (entries.length === 0) return '{}';
-    return entries
-      .map(([key, value]) => {
-        const yamlValue = toYaml(value, indent + 1);
-        if (typeof value === 'object' && value !== null) {
-          return `${prefix}${key}:\n${yamlValue}`;
-        }
-        return `${prefix}${key}: ${yamlValue}`;
-      })
-      .join('\n');
-  }
-
-  return String(data);
-}
-
 // ============================================================================
 // Command Action
 // ============================================================================
@@ -805,7 +759,7 @@ async function sessionsAction(options: SessionsOptions): Promise<void> {
     if (filteredSessions.length === 0) {
       console.log('[]');
     } else {
-      console.log(toYaml(filteredSessions));
+      console.log(YAML.stringify(filteredSessions, null, 2));
     }
     return;
   }

@@ -1,4 +1,5 @@
 import { useKeyboard } from '@opentui/react';
+import { useTheme } from '../stores/themeStore';
 import { Dots } from './Dots';
 
 export interface LoadingProps {
@@ -14,6 +15,7 @@ export function Loading({
   detail,
   onCancel,
 }: LoadingProps) {
+  const { theme } = useTheme();
   useKeyboard((key) => {
     if (onCancel && key.name === 'escape') {
       onCancel();
@@ -32,17 +34,17 @@ export function Loading({
         alignItems="center"
         justifyContent="center"
       >
-        <text fg="#eee">
+        <text fg={theme.primary}>
           {message}
           <Dots />
         </text>
         {detail ? (
-          <text fg="#888" marginTop={1}>
+          <text fg={theme.secondary} marginTop={1}>
             {detail}
           </text>
         ) : null}
         {onCancel ? (
-          <text fg="#555" marginTop={1}>
+          <text fg={theme.textMuted} marginTop={1}>
             Press Esc to cancel
           </text>
         ) : null}

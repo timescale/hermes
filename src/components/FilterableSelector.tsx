@@ -1,6 +1,7 @@
 import type { KeyEvent, ScrollBoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
 import { useEffect, useRef, useState } from 'react';
+import { useTheme } from '../stores/themeStore.ts';
 import { HotkeysBar } from './HotkeysBar';
 import {
   type BaseSelectorProps,
@@ -24,6 +25,8 @@ export interface HotkeyConfig {
 export interface FilterableSelectorProps extends BaseSelectorProps {
   /** Optional array of hotkeys to register */
   hotkeys?: HotkeyConfig[];
+  /** Optional callback for live preview - called on selection change, hover, and mouse-out */
+  onPreview?: (value: string | null) => void;
 }
 
 export function FilterableSelector({
@@ -36,6 +39,7 @@ export function FilterableSelector({
   onCancel,
   onBack,
   hotkeys,
+  onPreview,
 }: FilterableSelectorProps) {
   const [filterText, setFilterText] = useState('');
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -110,12 +114,20 @@ export function FilterableSelector({
       const newIndex = Math.max(0, selectedIndex - 1);
       flushSync(() => setSelectedIndex(newIndex));
       scrollToIndex(scrollboxRef.current, newIndex);
+      const option = filteredOptions[newIndex];
+      if (option && onPreview) {
+        onPreview(getOptionValue(option));
+      }
       return;
     }
     if (key.name === 'down') {
       const newIndex = Math.min(filteredOptions.length - 1, selectedIndex + 1);
       flushSync(() => setSelectedIndex(newIndex));
       scrollToIndex(scrollboxRef.current, newIndex);
+      const option = filteredOptions[newIndex];
+      if (option && onPreview) {
+        onPreview(getOptionValue(option));
+      }
       return;
     }
 
@@ -145,11 +157,22 @@ export function FilterableSelector({
 
   const handleItemHover = (index: number) => {
     setHoveredIndex(index);
+    const option = filteredOptions[index];
+    if (option && onPreview) {
+      onPreview(getOptionValue(option));
+    }
   };
 
   const handleMouseOut = () => {
     setHoveredIndex(null);
+    // Restore preview to currently selected item
+    const option = filteredOptions[clampedIndex];
+    if (option && onPreview) {
+      onPreview(getOptionValue(option));
+    }
   };
+
+  const { theme } = useTheme();
 
   const helpText = showBack
     ? 'Type to filter, arrows to navigate, Enter/click to select, Esc to go back'
@@ -166,20 +189,20 @@ export function FilterableSelector({
         flexGrow={1}
       >
         <text height={1}>{description}</text>
-        <text height={1} fg="#888888">
+        <text height={1} fg={theme.textMuted}>
           {helpText}
         </text>
 
         <box marginTop={1} flexDirection="row" height={1}>
-          <text fg="#888888">Filter: </text>
+          <text fg={theme.textMuted}>Filter: </text>
           <input
             focused
             value={filterText}
             placeholder="Type to filter..."
             onInput={handleFilterInput}
             flexGrow={1}
-            backgroundColor="#333333"
-            textColor="#ffffff"
+            backgroundColor={theme.backgroundElement}
+            textColor={theme.text}
           />
         </box>
 
@@ -204,12 +227,12 @@ export function FilterableSelector({
             ))}
           </scrollbox>
         ) : (
-          <text marginTop={1} fg="#888888">
+          <text marginTop={1} fg={theme.textMuted}>
             No items match your filter
           </text>
         )}
 
-        <text marginTop={1} fg="#555555">
+        <text marginTop={1} fg={theme.borderSubtle}>
           {filteredOptions.length} of {options.length} items shown
         </text>
 

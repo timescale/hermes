@@ -1,6 +1,7 @@
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
 import { useEffect, useRef, useState } from 'react';
+import { useTheme } from '../stores/themeStore.ts';
 import {
   type BaseSelectorProps,
   getOptionValue,
@@ -91,6 +92,8 @@ export function Selector({
     setHoveredIndex(null);
   };
 
+  const { theme } = useTheme();
+
   const helpText = showBack
     ? 'Arrows to navigate, Enter/click to select, Esc to go back'
     : 'Arrows to navigate, Enter/click to select, Esc to cancel';
@@ -106,7 +109,7 @@ export function Selector({
         flexGrow={1}
       >
         <text height={1}>{description}</text>
-        <text height={1} fg="#888888">
+        <text height={1} fg={theme.textMuted}>
           {helpText}
         </text>
 

@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+import type { ThemeColors } from '../services/theme.ts';
+import { useTheme } from '../stores/themeStore.ts';
 
 export type ToastType = 'error' | 'success' | 'info';
 
@@ -9,16 +11,21 @@ export interface ToastProps {
   onDismiss: () => void;
 }
 
-const COLORS: Record<ToastType, string> = {
-  error: '#ff6b6b',
-  success: '#51cf66',
-  info: '#888888',
-};
+function getColor(type: ToastType, theme: ThemeColors): string {
+  switch (type) {
+    case 'error':
+      return theme.error;
+    case 'success':
+      return theme.success;
+    case 'info':
+      return theme.textMuted;
+  }
+}
 
 const ICONS: Record<ToastType, string> = {
-  error: '✗',
-  success: '✓',
-  info: '●',
+  error: '\u2717',
+  success: '\u2713',
+  info: '\u25cf',
 };
 
 export function Toast({
@@ -27,12 +34,14 @@ export function Toast({
   duration = 3000,
   onDismiss,
 }: ToastProps) {
+  const { theme } = useTheme();
+
   useEffect(() => {
     const timer = setTimeout(onDismiss, duration);
     return () => clearTimeout(timer);
   }, [duration, onDismiss]);
 
-  const color = COLORS[type];
+  const color = getColor(type, theme);
   const icon = ICONS[type];
 
   return (
@@ -42,11 +51,13 @@ export function Toast({
       right={1}
       border
       borderStyle="single"
+      borderColor={theme.border}
+      backgroundColor={theme.backgroundPanel}
       padding={1}
       paddingLeft={2}
       paddingRight={2}
     >
-      <text>
+      <text fg={theme.text}>
         <span fg={color}>{icon}</span> {message}
       </text>
     </box>

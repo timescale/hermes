@@ -1,4 +1,5 @@
 import type { ScrollBoxRenderable, SelectOption } from '@opentui/core';
+import { useTheme } from '../stores/themeStore.ts';
 
 export interface BaseSelectorProps {
   title: string;
@@ -26,10 +27,16 @@ export function ListItem({
   onMouseDown,
   onMouseOver,
 }: ListItemProps) {
+  const { theme } = useTheme();
+
   // Selected takes priority, then hovered, then default
-  const bgColor = isSelected ? '#0066cc' : isHovered ? '#333344' : undefined;
-  const textColor = isSelected ? '#ffffff' : undefined;
-  const descColor = isSelected ? '#cccccc' : '#888888';
+  const bgColor = isSelected
+    ? theme.primary
+    : isHovered
+      ? theme.backgroundElement
+      : undefined;
+  const textColor = isSelected ? theme.background : theme.text;
+  const descColor = isSelected ? theme.background : theme.textMuted;
   const arrow = isSelected ? '>' : ' ';
 
   return (

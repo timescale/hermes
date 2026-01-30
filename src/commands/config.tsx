@@ -2,8 +2,7 @@
 // Init Command - Configure hermes for a project
 // ============================================================================
 
-import { createCliRenderer, type SelectOption } from '@opentui/core';
-import { createRoot } from '@opentui/react';
+import type { SelectOption } from '@opentui/core';
 import { Command } from 'commander';
 import { useEffect, useMemo, useState } from 'react';
 import { CopyOnSelect } from '../components/CopyOnSelect';
@@ -30,7 +29,8 @@ import {
   runOpencodeInDocker,
 } from '../services/opencode';
 import { listServices, type TigerService } from '../services/tiger';
-import { ensureGitignore, restoreConsole } from '../utils';
+import { createTui } from '../services/tui';
+import { ensureGitignore } from '../utils';
 
 // ============================================================================
 // Types
@@ -467,10 +467,9 @@ export async function configAction(): Promise<void> {
       resolveWizard = resolve;
     });
 
-    const renderer = await createCliRenderer({ exitOnCtrlC: true });
-    const root = createRoot(renderer);
+    const { render, destroy } = await createTui();
 
-    root.render(
+    render(
       <CopyOnSelect>
         <ConfigWizard
           onComplete={(result) => resolveWizard(result)}
@@ -482,9 +481,7 @@ export async function configAction(): Promise<void> {
 
     const result = await wizardPromise;
 
-    await renderer.idle();
-    renderer.destroy();
-    restoreConsole();
+    await destroy();
 
     if (result.type === 'needs-agent-auth') {
       // Run interactive login

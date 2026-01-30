@@ -1,6 +1,7 @@
 import { RGBA, TextAttributes } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import type { ReactNode } from 'react';
+import { useTheme } from '../stores/themeStore.ts';
 
 export interface ModalProps {
   title: string;
@@ -17,6 +18,8 @@ export function Modal({
   maxWidth = 60,
   onClose,
 }: ModalProps) {
+  const { theme } = useTheme();
+
   useKeyboard((key) => {
     if (key.name === 'escape') {
       onClose?.();
@@ -39,7 +42,7 @@ export function Modal({
         flexDirection="column"
         minWidth={minWidth}
         maxWidth={maxWidth}
-        backgroundColor="#151515"
+        backgroundColor={theme.backgroundPanel}
       >
         <box
           marginLeft={2}
@@ -47,10 +50,15 @@ export function Modal({
           marginBottom={1}
           flexDirection="row"
         >
-          <text flexGrow={1} flexShrink={1} attributes={TextAttributes.BOLD}>
+          <text
+            flexGrow={1}
+            flexShrink={1}
+            attributes={TextAttributes.BOLD}
+            fg={theme.text}
+          >
             {title}
           </text>
-          {onClose ? <text fg="#888888">esc</text> : null}
+          {onClose ? <text fg={theme.textMuted}>esc</text> : null}
         </box>
         {children}
       </box>

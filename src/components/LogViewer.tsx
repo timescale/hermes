@@ -6,6 +6,7 @@ import {
   type LogStream,
   streamContainerLogs,
 } from '../services/docker';
+import { useTheme } from '../stores/themeStore';
 import { AnsiText } from './AnsiText';
 
 export interface LogViewerProps {
@@ -21,6 +22,7 @@ export function LogViewer({
   isInteractive,
   onError,
 }: LogViewerProps) {
+  const { theme } = useTheme();
   const [lines, setLines] = useState<string[]>([]);
   const [following, setFollowing] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -134,7 +136,7 @@ export function LogViewer({
   if (loading) {
     return (
       <box flexGrow={1} alignItems="center" justifyContent="center">
-        <text fg="#888888">Loading logs...</text>
+        <text fg={theme.textMuted}>Loading logs...</text>
       </box>
     );
   }
@@ -143,7 +145,9 @@ export function LogViewer({
   if (isInteractive) {
     return (
       <box flexGrow={1} alignItems="center" justifyContent="center">
-        <text fg="#888888">Logs not available for interactive sessions</text>
+        <text fg={theme.textMuted}>
+          Logs not available for interactive sessions
+        </text>
       </box>
     );
   }
@@ -151,7 +155,7 @@ export function LogViewer({
   if (lines.length === 0) {
     return (
       <box flexGrow={1} alignItems="center" justifyContent="center">
-        <text fg="#888888">No logs available</text>
+        <text fg={theme.textMuted}>No logs available</text>
       </box>
     );
   }
@@ -168,7 +172,7 @@ export function LogViewer({
       </scrollbox>
       {following && (
         <box position="absolute" bottom={0} right={1}>
-          <text fg="#51cf66">[F]</text>
+          <text fg={theme.success}>[F]</text>
         </box>
       )}
     </box>

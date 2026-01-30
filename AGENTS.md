@@ -36,6 +36,9 @@ Always use `./bun` wrapper script (auto-installs pinned Bun version):
 
 # Run the CLI directly
 ./bun index.ts <command>
+
+# Run the pilotty CLI for terminal automation testing
+./bun run pilotty <args>
 ```
 
 **Important**: After making code changes, always run `./bun run check`.
@@ -195,8 +198,8 @@ registerKeys(['escape'], () => onCancel());
 Always prefer to use the named props over the `style` prop for better readability.
 
 ```tsx
-<text fg="#888888" />              // Prefer this
-<text style={{ fg: '#888888' }} /> // Avoid this
+<text fg={theme.textMuted} />            // Prefer this
+<text style={{ fg: theme.textMuted }} /> // Avoid this
 ```
 
 Correct existing usages of `style` when editing components.

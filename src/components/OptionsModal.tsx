@@ -1,5 +1,6 @@
 import { useKeyboard } from '@opentui/react';
 import { type ReactNode, useState } from 'react';
+import { useTheme } from '../stores/themeStore';
 import { Modal } from './Modal';
 
 export interface Option {
@@ -29,6 +30,7 @@ export function OptionsModal({
   maxWidth,
   children,
 }: OptionsModalProps) {
+  const { theme } = useTheme();
   const [selectedIndex, setSelectedIndex] = useState(0);
   useKeyboard((key) => {
     if (key.name === 'up') {
@@ -62,7 +64,7 @@ export function OptionsModal({
       maxWidth={maxWidth}
       onClose={onCancel}
     >
-      <text fg="#ddd" marginLeft={2} marginRight={2}>
+      <text fg={theme.text} marginLeft={2} marginRight={2}>
         {message}
       </text>
       {children}
@@ -74,9 +76,9 @@ export function OptionsModal({
               key={option.name}
               paddingLeft={2}
               paddingRight={2}
-              backgroundColor={sel ? '#FBB283' : undefined}
+              backgroundColor={sel ? theme.primary : undefined}
             >
-              <text fg={sel ? '#0B0A0A' : '#eee'}>
+              <text fg={sel ? theme.background : theme.text}>
                 {option.key ? (
                   <>
                     [
@@ -88,7 +90,7 @@ export function OptionsModal({
                 ) : null}
                 {option.name}
                 {option.description ? (
-                  <span fg={sel ? '#222' : '#888'}>
+                  <span fg={sel ? theme.backgroundElement : theme.textMuted}>
                     {' '}
                     - {option.description}
                   </span>

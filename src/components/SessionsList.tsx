@@ -3,6 +3,7 @@ import { flushSync, useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { type HermesSession, listHermesSessions } from '../services/docker';
 import { log } from '../services/logger';
+import { useTheme } from '../stores/themeStore';
 import { Frame } from './Frame';
 import { HotkeysBar } from './HotkeysBar';
 import { Toast, type ToastType } from './Toast';
@@ -56,21 +57,6 @@ function getStatusIcon(session: HermesSession): string {
   }
 }
 
-function getStatusColor(session: HermesSession): string {
-  switch (session.status) {
-    case 'running':
-      return '#51cf66';
-    case 'exited':
-      return session.exitCode === 0 ? '#868e96' : '#ff6b6b';
-    case 'paused':
-      return '#fcc419';
-    case 'dead':
-      return '#ff6b6b';
-    default:
-      return '#888888';
-  }
-}
-
 function getStatusText(session: HermesSession): string {
   if (session.status === 'exited') {
     return session.exitCode === 0 ? 'complete' : `failed(${session.exitCode})`;
@@ -91,6 +77,7 @@ export function SessionsList({
   onQuit,
   onNewTask,
 }: SessionsListProps) {
+  const { theme } = useTheme();
   const [sessions, setSessions] = useState<HermesSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterText, setFilterText] = useState('');
@@ -237,7 +224,7 @@ export function SessionsList({
   if (loading && sessions.length === 0) {
     return (
       <Frame title="Hermes Sessions" centered>
-        <text fg="#888888">Loading sessions...</text>
+        <text fg={theme.textMuted}>Loading sessions...</text>
       </Frame>
     );
   }
@@ -250,11 +237,11 @@ export function SessionsList({
       {/* Filter bar */}
       <box height={1} marginBottom={1} flexDirection="row">
         <text height={1}>
-          Filter: <span fg="#51cf66">{filterText || ''}</span>
-          <span fg="#444444">█</span>
+          Filter: <span fg={theme.primary}>{filterText || ''}</span>
+          <span fg={theme.textMuted}>█</span>
         </text>
         <text height={1} flexGrow={1} />
-        <text height={1} fg="#888888">
+        <text height={1} fg={theme.textMuted}>
           [{filterLabel}] {countText}
         </text>
       </box>
@@ -262,19 +249,19 @@ export function SessionsList({
       {/* Column headers */}
       <box height={1} flexDirection="row" paddingLeft={1} paddingRight={1}>
         <text height={1} width={3} />
-        <text height={1} flexGrow={2} flexBasis={0} fg="#888888">
+        <text height={1} flexGrow={2} flexBasis={0} fg={theme.textMuted}>
           NAME
         </text>
-        <text height={1} width={12} fg="#888888">
+        <text height={1} width={12} fg={theme.textMuted}>
           STATUS
         </text>
-        <text height={1} flexGrow={1} flexBasis={0} fg="#888888">
+        <text height={1} flexGrow={1} flexBasis={0} fg={theme.textMuted}>
           AGENT
         </text>
-        <text height={1} flexGrow={2} flexBasis={0} fg="#888888">
+        <text height={1} flexGrow={2} flexBasis={0} fg={theme.textMuted}>
           REPO
         </text>
-        <text height={1} width={10} fg="#888888">
+        <text height={1} width={10} fg={theme.textMuted}>
           CREATED
         </text>
       </box>
@@ -282,7 +269,7 @@ export function SessionsList({
       {/* Session list */}
       {filteredSessions.length === 0 ? (
         <box flexGrow={1} alignItems="center" justifyContent="center">
-          <text fg="#888888">
+          <text fg={theme.textMuted}>
             {sessions.length === 0
               ? 'No sessions found. Run `hermes branch <prompt>` to create one.'
               : 'No sessions match the current filter.'}
@@ -293,7 +280,15 @@ export function SessionsList({
           {filteredSessions.map((session, index) => {
             const isSelected = index === selectedIndex;
             const statusIcon = getStatusIcon(session);
-            const statusColor = getStatusColor(session);
+            const statusColor =
+              {
+                created: theme.info,
+                exited: session.exitCode === 0 ? theme.text : theme.error,
+                restarting: theme.accent,
+                running: theme.success,
+                paused: theme.warning,
+                dead: theme.error,
+              }[session.status] || theme.textMuted;
             const statusText = getStatusText(session);
             const agentText = session.model
               ? `${session.agent}/${session.model}`
@@ -302,58 +297,35 @@ export function SessionsList({
               ? formatRelativeTime(session.created)
               : '';
 
+            const itemFg = isSelected ? theme.background : theme.text;
+            const itemFgMuted = isSelected
+              ? theme.backgroundElement
+              : theme.textMuted;
             return (
               <box
                 key={session.containerId}
                 height={1}
                 flexDirection="row"
-                backgroundColor={isSelected ? '#0066cc' : undefined}
+                backgroundColor={isSelected ? theme.primary : undefined}
                 paddingLeft={1}
                 paddingRight={1}
               >
-                <text
-                  height={1}
-                  width={3}
-                  fg={isSelected ? '#ffffff' : statusColor}
-                >
+                <text height={1} width={3} fg={statusColor}>
                   {statusIcon}
                 </text>
-                <text
-                  height={1}
-                  flexGrow={2}
-                  flexBasis={0}
-                  fg={isSelected ? '#ffffff' : undefined}
-                >
+                <text height={1} flexGrow={2} flexBasis={0} fg={itemFg}>
                   {session.name}
                 </text>
-                <text
-                  height={1}
-                  width={12}
-                  fg={isSelected ? '#cccccc' : '#888888'}
-                >
+                <text height={1} width={12} fg={itemFgMuted}>
                   {statusText}
                 </text>
-                <text
-                  height={1}
-                  flexGrow={1}
-                  flexBasis={0}
-                  fg={isSelected ? '#ffffff' : undefined}
-                >
+                <text height={1} flexGrow={1} flexBasis={0} fg={itemFg}>
                   {agentText}
                 </text>
-                <text
-                  height={1}
-                  flexGrow={2}
-                  flexBasis={0}
-                  fg={isSelected ? '#ffffff' : undefined}
-                >
+                <text height={1} flexGrow={2} flexBasis={0} fg={itemFg}>
                   {session.repo}
                 </text>
-                <text
-                  height={1}
-                  width={10}
-                  fg={isSelected ? '#cccccc' : '#666666'}
-                >
+                <text height={1} width={10} fg={itemFgMuted}>
                   {timeText}
                 </text>
               </box>

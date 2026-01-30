@@ -3,8 +3,7 @@
 // ============================================================================
 
 import type { SelectOption } from '@opentui/core';
-import { createCliRenderer } from '@opentui/core';
-import { createRoot, useKeyboard } from '@opentui/react';
+import { useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ensureDockerImage, type ImageBuildProgress } from '../services/docker';
 import {
@@ -14,7 +13,8 @@ import {
   installProvider,
   startProvider,
 } from '../services/dockerSetup';
-import { restoreConsole } from '../utils';
+import { createTui } from '../services/tui';
+import { useTheme } from '../stores/themeStore';
 import { CopyOnSelect } from './CopyOnSelect';
 import { Loading } from './Loading';
 import { Selector } from './Selector';
@@ -94,6 +94,7 @@ export function DockerSetup({
   showBack = false,
   onBack,
 }: DockerSetupProps) {
+  const { theme } = useTheme();
   const [state, setState] = useState<SetupState>({ type: 'checking' });
 
   // Helper to start image building after Docker is ready
@@ -292,8 +293,8 @@ export function DockerSetup({
           alignItems="center"
           justifyContent="center"
         >
-          <text fg="#0c0">Docker is running!</text>
-          <text fg="#555555" marginTop={1}>
+          <text fg={theme.success}>Docker is running!</text>
+          <text fg={theme.textMuted} marginTop={1}>
             Press Esc to exit
           </text>
         </box>
@@ -355,12 +356,14 @@ export function DockerSetup({
           alignItems="center"
           justifyContent="center"
         >
-          <text fg="#ff4444">Error: {state.message}</text>
-          <text fg="#888888" marginTop={1}>
+          <text fg={theme.error}>Error: {state.message}</text>
+          <text fg={theme.textMuted} marginTop={1}>
             Please install Docker manually and try again.
           </text>
-          <text fg="#888888">Visit: https://docs.docker.com/get-docker/</text>
-          <text fg="#555555" marginTop={1}>
+          <text fg={theme.primary}>
+            Visit: https://docs.docker.com/get-docker/
+          </text>
+          <text fg={theme.textMuted} marginTop={1}>
             Press Esc to exit
           </text>
         </box>
@@ -426,10 +429,9 @@ export async function runDockerSetupScreen(): Promise<DockerSetupResult> {
     resolveSetup = resolve;
   });
 
-  const renderer = await createCliRenderer({ exitOnCtrlC: true });
-  const root = createRoot(renderer);
+  const { render, destroy } = await createTui();
 
-  root.render(
+  render(
     <CopyOnSelect>
       <DockerSetup
         title="Docker Setup"
@@ -440,9 +442,7 @@ export async function runDockerSetupScreen(): Promise<DockerSetupResult> {
 
   const result = await setupPromise;
 
-  await renderer.idle();
-  renderer.destroy();
-  restoreConsole();
+  await destroy();
 
   return result;
 }

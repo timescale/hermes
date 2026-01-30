@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
+import { useTheme } from '../stores/themeStore';
 
-const TITLE_SOLID_COLOR = '#d0d0d0';
-const TITLE_OUTLINE_COLOR = '#5c5c5c';
 const TITLE_MAX_WIDTH = 76;
 const TITLE_PADDING = 4;
 
@@ -70,6 +69,7 @@ const HERMES_TITLE_WIDE_WIDTH = getMaxLineLength(HERMES_TITLE_WIDE);
  * Switches between wide and narrow versions based on terminal width.
  */
 export function HermesTitle() {
+  const { theme } = useTheme();
   const [columns, setColumns] = useState(() => process.stdout.columns ?? 80);
 
   useEffect(() => {
@@ -104,9 +104,9 @@ export function HermesTitle() {
                 {segments.map((segment) => {
                   const fg =
                     segment.type === 'solid'
-                      ? TITLE_SOLID_COLOR
+                      ? theme.text
                       : segment.type === 'outline'
-                        ? TITLE_OUTLINE_COLOR
+                        ? theme.textMuted
                         : undefined;
                   const segmentKey = `title-segment-${rowKey}-${segment.type}-${segmentOffset}`;
                   segmentOffset += segment.text.length;
@@ -121,7 +121,7 @@ export function HermesTitle() {
           })}
         </box>
       ) : (
-        <text fg={TITLE_SOLID_COLOR}>{HERMES_TITLE_NARROW}</text>
+        <text fg={theme.text}>{HERMES_TITLE_NARROW}</text>
       )}
     </box>
   );
