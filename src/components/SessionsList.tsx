@@ -276,7 +276,13 @@ export function SessionsList({
       </box>
 
       {/* Column headers */}
-      <box height={1} flexDirection="row" paddingLeft={1} paddingRight={1}>
+      <box
+        height={1}
+        flexDirection="row"
+        paddingLeft={1}
+        paddingRight={1}
+        gap={2}
+      >
         <text height={1} width={3} />
         <text height={1} flexGrow={2} flexBasis={0} fg={theme.textMuted}>
           NAME
@@ -284,10 +290,22 @@ export function SessionsList({
         <text height={1} width={12} fg={theme.textMuted}>
           STATUS
         </text>
-        <text height={1} flexGrow={1} flexBasis={0} fg={theme.textMuted}>
+        <text
+          height={1}
+          flexGrow={1}
+          flexShrink={1}
+          flexBasis={0}
+          fg={theme.textMuted}
+        >
           AGENT
         </text>
-        <text height={1} flexGrow={2} flexBasis={0} fg={theme.textMuted}>
+        <text
+          height={1}
+          flexGrow={2}
+          flexShrink={1}
+          flexBasis={0}
+          fg={theme.textMuted}
+        >
           REPO
         </text>
         <text height={1} width={10} fg={theme.textMuted}>
@@ -319,9 +337,14 @@ export function SessionsList({
                 dead: theme.error,
               }[session.status] || theme.textMuted;
             const statusText = getStatusText(session);
-            const agentText = session.model
-              ? `${session.agent}/${session.model}`
-              : session.agent;
+            const agent =
+              {
+                claude: 'cc',
+                opencode: 'oc',
+              }[session.agent] || session.agent;
+            const modelParts = session.model?.split('/');
+            const model = modelParts?.[1] || session.model;
+            const agentText = `${agent}/${model}`;
             const timeText = session.created
               ? formatRelativeTime(session.created)
               : '';
@@ -338,6 +361,7 @@ export function SessionsList({
                 backgroundColor={isSelected ? theme.primary : undefined}
                 paddingLeft={1}
                 paddingRight={1}
+                gap={2}
               >
                 <text height={1} width={3} fg={statusColor}>
                   {statusIcon}
@@ -348,10 +372,26 @@ export function SessionsList({
                 <text height={1} width={12} fg={itemFgMuted}>
                   {statusText}
                 </text>
-                <text height={1} flexGrow={1} flexBasis={0} fg={itemFg}>
+                <text
+                  height={1}
+                  flexGrow={1}
+                  flexShrink={1}
+                  flexBasis={0}
+                  fg={itemFg}
+                  overflow="hidden"
+                  wrapMode="none"
+                >
                   {agentText}
                 </text>
-                <text height={1} flexGrow={2} flexBasis={0} fg={itemFg}>
+                <text
+                  height={1}
+                  flexGrow={2}
+                  flexShrink={1}
+                  flexBasis={0}
+                  fg={itemFg}
+                  overflow="hidden"
+                  wrapMode="none"
+                >
                   {session.repo}
                 </text>
                 <text height={1} width={10} fg={itemFgMuted}>

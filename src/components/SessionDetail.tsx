@@ -17,7 +17,6 @@ import { Toast, type ToastType } from './Toast';
 export interface SessionDetailProps {
   session: HermesSession;
   onBack: () => void;
-  onQuit: () => void;
   onAttach: (containerId: string) => void;
   onResume: (session: HermesSession) => void;
   onSessionDeleted: () => void;
@@ -76,7 +75,6 @@ function getStatusText(session: HermesSession): string {
 export function SessionDetail({
   session: initialSession,
   onBack,
-  onQuit,
   onAttach,
   onResume,
   onSessionDeleted,
@@ -160,13 +158,7 @@ export function SessionDetail({
     // Ignore if modal is open or action in progress
     if (modal || actionInProgress) return;
 
-    if (key.raw === 'q') {
-      onQuit();
-    } else if (
-      key.name === 'escape' ||
-      key.name === 'backspace' ||
-      key.raw === 'b'
-    ) {
+    if (key.name === 'escape' || key.name === 'backspace' || key.raw === 'b') {
       onBack();
     } else if (key.raw === 's' && isRunning) {
       setModal('stop');
@@ -210,7 +202,6 @@ export function SessionDetail({
         ]
       : []),
     ['b', 'ack'],
-    ['q', 'uit'],
   ] as unknown as readonly [string, string][];
 
   return (

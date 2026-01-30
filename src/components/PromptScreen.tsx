@@ -416,11 +416,11 @@ export function PromptScreen({
                 {submitMode === 'interactive' ? (
                   <text fg={theme.success}>[interactive]</text>
                 ) : null}
-                <text fg={theme.textMuted}>
+                <text fg={model?.name ? theme.text : theme.textMuted}>
                   {model?.name || modelId || 'Loading...'}
                 </text>
                 {model?.description ? (
-                  <text fg={theme.borderSubtle}>{model.description}</text>
+                  <text fg={theme.textMuted}>{model.description}</text>
                 ) : null}
               </box>
             </box>
