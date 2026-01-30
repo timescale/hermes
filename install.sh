@@ -170,7 +170,7 @@ install_dev() {
 
   # Determine clone location
   DEFAULT_CLONE_DIR="$HOME/dev/hermes"
-  read -r -p "Clone location [$DEFAULT_CLONE_DIR]: " CLONE_DIR
+  read -r -p "Clone location [$DEFAULT_CLONE_DIR]: " CLONE_DIR < /dev/tty
   CLONE_DIR="${CLONE_DIR:-$DEFAULT_CLONE_DIR}"
 
   # Create parent directory if needed
@@ -178,7 +178,7 @@ install_dev() {
 
   if [ -d "$CLONE_DIR" ]; then
     echo -e "${YELLOW}!${NC} Directory already exists: $CLONE_DIR"
-    read -r -p "Update existing installation? [Y/n]: " update_choice
+    read -r -p "Update existing installation? [Y/n]: " update_choice < /dev/tty
     if [[ "$update_choice" =~ ^[Nn] ]]; then
       echo "Aborted."
       exit 0
@@ -282,7 +282,7 @@ echo "  2) Clone repository and link with bun (for developers)"
 echo "     Requires bun, allows you to modify the source"
 echo ""
 
-read -r -p "Enter choice [1-2]: " choice
+read -r -p "Enter choice [1-2]: " choice < /dev/tty
 
 case $choice in
   1)
