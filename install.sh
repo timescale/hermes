@@ -111,6 +111,17 @@ install_binary() {
   echo ""
   echo -e "${BLUE}Downloading pre-compiled binary...${NC}"
 
+  # Check for unsupported platform
+  if [ "$OS_TYPE" = "darwin" ] && [ "$ARCH_TYPE" = "x64" ]; then
+    echo -e "${RED}Error: Pre-compiled binaries are not available for Intel Macs (darwin-x64).${NC}"
+    echo ""
+    echo "Options:"
+    echo "  1) Use option 2 (clone and link with bun) instead"
+    echo "  2) If you have an Apple Silicon Mac, the darwin-arm64 binary should work"
+    echo ""
+    exit 1
+  fi
+
   BINARY_FILE="hermes-${OS_TYPE}-${ARCH_TYPE}"
 
   # Create install directory if it doesn't exist

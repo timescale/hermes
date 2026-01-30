@@ -24,12 +24,8 @@ jobs:
             runner: ubuntu-24.04-arm
             target: bun-linux-arm64
           - os: darwin
-            arch: x64
-            runner: macos-13
-            target: bun-darwin-x64
-          - os: darwin
             arch: arm64
-            runner: macos-14
+            runner: macos-latest
             target: bun-darwin-arm64
 
     steps:
