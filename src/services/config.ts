@@ -2,7 +2,6 @@
 // Configuration Service - Read/write YAML config files
 // ============================================================================
 
-import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { YAML } from 'bun';
 import envPaths from 'env-paths';
@@ -66,14 +65,12 @@ function createConfigStore<T extends object>(
 ): ConfigStore<T> {
   const { getConfigDir, headerComment } = options;
   const configPath = () => join(getConfigDir(), CONFIG_FILENAME);
+  const configFile = () => Bun.file(configPath());
 
-  const exists = async (): Promise<boolean> => {
-    const file = Bun.file(configPath());
-    return file.exists();
-  };
+  const exists = async (): Promise<boolean> => configFile().exists();
 
   const read = async (): Promise<T | undefined> => {
-    const file = Bun.file(configPath());
+    const file = configFile();
     if (!(await file.exists())) {
       return undefined;
     }
@@ -97,9 +94,7 @@ function createConfigStore<T extends object>(
   };
 
   const write = async (config: T): Promise<void> => {
-    await mkdir(getConfigDir(), { recursive: true });
-    await Bun.write(
-      configPath(),
+    await configFile().write(
       `${headerComment}---\n${YAML.stringify(config, null, 2)}`,
     );
   };
@@ -107,11 +102,11 @@ function createConfigStore<T extends object>(
   const writeValue = async <K extends keyof T>(
     key: K,
     value: T[K],
-  ): Promise<void> => {
-    const config = (await read()) || ({} as T);
-    config[key] = value;
-    await write(config);
-  };
+  ): Promise<void> =>
+    write({
+      ...((await read()) as T),
+      [key]: value,
+    });
 
   return {
     getConfigDir,
