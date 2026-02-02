@@ -1,10 +1,15 @@
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type HermesSession, listHermesSessions } from '../services/docker';
+import {
+  type HermesSession,
+  listHermesSessions,
+  removeContainer,
+} from '../services/docker';
 import { log } from '../services/logger';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
+import { ConfirmModal } from './ConfirmModal';
 import { Frame } from './Frame';
 import { HotkeysBar } from './HotkeysBar';
 import { Toast, type ToastType } from './Toast';
@@ -100,6 +105,8 @@ export function SessionsList({
     currentRepo ? 'local' : 'global',
   );
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [deleteModal, setDeleteModal] = useState<HermesSession | null>(null);
+  const [actionInProgress, setActionInProgress] = useState(false);
   const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 
   // Filter sessions based on text, mode, and scope
@@ -168,6 +175,36 @@ export function SessionsList({
     }
   }, []);
 
+  // Delete session handler
+  const handleDelete = useCallback(async () => {
+    if (!deleteModal) return;
+    const session = deleteModal;
+
+    // Determine which session to select after deletion:
+    // prefer next item, fall back to previous if deleting last item
+    const deleteIndex = filteredSessions.findIndex(
+      (s) => s.containerId === session.containerId,
+    );
+    const nextSession =
+      filteredSessions[deleteIndex + 1] ?? filteredSessions[deleteIndex - 1];
+    const nextSessionId = nextSession?.containerId ?? null;
+
+    setDeleteModal(null);
+    setActionInProgress(true);
+    try {
+      await removeContainer(session.containerId);
+      setToast({ message: 'Session deleted', type: 'success' });
+      // Update selection before refreshing so it persists
+      setSelectedSessionId(nextSessionId);
+      await loadSessions();
+    } catch (err) {
+      log.error({ err }, `Failed to remove container ${session.containerId}`);
+      setToast({ message: `Failed to delete: ${err}`, type: 'error' });
+    } finally {
+      setActionInProgress(false);
+    }
+  }, [deleteModal, filteredSessions, loadSessions, setSelectedSessionId]);
+
   // Initial load
   useEffect(() => {
     loadSessions();
@@ -201,8 +238,20 @@ export function SessionsList({
 
   // Keyboard handling
   useKeyboard((key) => {
+    // Ignore keyboard input when modal is open or action in progress
+    if (deleteModal || actionInProgress) return;
+
     if (key.name === 'escape') {
       onQuit();
+      return;
+    }
+
+    // Delete selected session (ctrl+d or delete key)
+    if ((key.name === 'd' && key.ctrl) || key.name === 'delete') {
+      const session = filteredSessions[selectedIndex];
+      if (session) {
+        setDeleteModal(session);
+      }
       return;
     }
 
@@ -440,10 +489,24 @@ export function SessionsList({
           ['enter', 'view'],
           ['tab', 'filter'],
           ...(currentRepo ? [['ctrl+l', 'scope'] as [string, string]] : []),
+          ['ctrl+d', 'delete'],
           ['ctrl+p', 'new'],
           ['ctrl+r', 'refresh'],
         ]}
       />
+
+      {/* Delete confirmation modal */}
+      {deleteModal && (
+        <ConfirmModal
+          title="Delete Session"
+          message={`Delete "${deleteModal.name}"?`}
+          detail="This will remove the container and any unsaved work."
+          confirmLabel="Delete"
+          confirmColor={theme.error}
+          onConfirm={handleDelete}
+          onCancel={() => setDeleteModal(null)}
+        />
+      )}
 
       {/* Toast notifications */}
       {toast && (
