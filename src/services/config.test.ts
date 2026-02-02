@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   type ProjectConfig,
   projectConfig,
+  readConfig,
   type UserConfig,
   userConfig,
 } from './config';
@@ -328,6 +329,134 @@ describe('userConfig', () => {
 
       expect(readBack).toEqual(original);
     });
+  });
+});
+
+describe('readConfig (merged config)', () => {
+  const testProjectDir = '.hermes-merged-test';
+  const originalCwd = process.cwd();
+  const originalEnv = process.env.XDG_CONFIG_HOME;
+  let projectTestDir: string;
+  let userTestDir: string;
+
+  beforeEach(async () => {
+    // Set up project config test directory
+    projectTestDir = join(originalCwd, testProjectDir);
+    await mkdir(projectTestDir, { recursive: true });
+    process.chdir(projectTestDir);
+
+    // Set up user config test directory
+    userTestDir = join(originalCwd, '.user-config-merged-test');
+    await mkdir(userTestDir, { recursive: true });
+    process.env.XDG_CONFIG_HOME = userTestDir;
+  });
+
+  afterEach(async () => {
+    process.chdir(originalCwd);
+    if (originalEnv !== undefined) {
+      process.env.XDG_CONFIG_HOME = originalEnv;
+    } else {
+      delete process.env.XDG_CONFIG_HOME;
+    }
+    try {
+      await rm(projectTestDir, { recursive: true, force: true });
+      await rm(userTestDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  });
+
+  test('returns undefined when neither config exists', async () => {
+    const config = await readConfig();
+    expect(config).toBeUndefined();
+  });
+
+  test('returns user config when only user config exists', async () => {
+    await userConfig.write({ themeName: 'dracula', agent: 'claude' });
+
+    const config = await readConfig();
+    expect(config).toEqual({ themeName: 'dracula', agent: 'claude' });
+  });
+
+  test('returns project config when only project config exists', async () => {
+    await projectConfig.write({ agent: 'opencode', model: 'gpt-4' });
+
+    const config = await readConfig();
+    expect(config).toEqual({ agent: 'opencode', model: 'gpt-4' });
+  });
+
+  test('merges user and project config with project taking precedence', async () => {
+    // User sets defaults
+    await userConfig.write({
+      themeName: 'dracula',
+      agent: 'claude',
+      model: 'sonnet',
+    });
+
+    // Project overrides agent but not theme or model
+    await projectConfig.write({ agent: 'opencode' });
+
+    const config = await readConfig();
+    expect(config).toEqual({
+      themeName: 'dracula', // from user
+      agent: 'opencode', // overridden by project
+      model: 'sonnet', // from user (not overridden)
+    });
+  });
+
+  test('project config overrides all matching keys', async () => {
+    await userConfig.write({
+      themeName: 'nord',
+      agent: 'claude',
+      model: 'opus',
+      tigerServiceId: 'user-svc',
+    });
+
+    await projectConfig.write({
+      agent: 'opencode',
+      model: 'gpt-4',
+      tigerServiceId: 'project-svc',
+    });
+
+    const config = await readConfig();
+    expect(config).toEqual({
+      themeName: 'nord', // only in user config
+      agent: 'opencode', // project override
+      model: 'gpt-4', // project override
+      tigerServiceId: 'project-svc', // project override
+    });
+  });
+
+  test('undefined values in project config do not override user config', async () => {
+    await userConfig.write({
+      themeName: 'gruvbox',
+      agent: 'claude',
+      model: 'sonnet',
+    });
+
+    // Project config only sets agent, model is undefined
+    await projectConfig.write({ agent: 'opencode' });
+
+    const config = await readConfig();
+    expect(config?.model).toBe('sonnet'); // user value preserved
+    expect(config?.agent).toBe('opencode'); // project override
+  });
+
+  test('null values in project config override user config', async () => {
+    await userConfig.write({
+      tigerServiceId: 'user-svc',
+      agent: 'claude',
+    });
+
+    // Project explicitly sets tigerServiceId to null (no DB fork)
+    await projectConfig.write({
+      tigerServiceId: null,
+      agent: 'opencode',
+    });
+
+    const config = await readConfig();
+    expect(config?.tigerServiceId).toBeNull(); // project override with null
+    expect(config?.agent).toBe('opencode');
   });
 });
 

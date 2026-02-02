@@ -31,7 +31,16 @@ export interface ProjectConfig {
 export interface UserConfig {
   // UI theme
   themeName?: string;
+
+  // User can also set defaults for project-level settings
+  // These are used when project config doesn't specify them
+  tigerServiceId?: string | null;
+  agent?: AgentType;
+  model?: string;
 }
+
+/** Merged config combining user and project settings (project overrides user) */
+export type Config = ProjectConfig & UserConfig;
 
 // ============================================================================
 // Config Store Factory
@@ -141,3 +150,43 @@ export const userConfig = createConfigStore<UserConfig>({
 # https://github.com/timescale/hermes
 `,
 });
+
+// ============================================================================
+// Merged Config Reader
+// ============================================================================
+
+/**
+ * Read the effective/merged config.
+ *
+ * Config values are merged with project config taking precedence over user config.
+ * This allows users to set defaults in their user config (e.g., theme, preferred agent)
+ * while allowing per-project overrides.
+ *
+ * @returns The merged config, or undefined if neither config file exists
+ */
+export async function readConfig(): Promise<Config | undefined> {
+  const [user, project] = await Promise.all([
+    userConfig.read(),
+    projectConfig.read(),
+  ]);
+
+  // If neither exists, return undefined
+  if (!user && !project) {
+    return undefined;
+  }
+
+  // Merge: user config is the base, project config overrides
+  // Only override with defined values (not undefined)
+  const merged: Config = { ...user };
+
+  if (project) {
+    for (const key of Object.keys(project) as (keyof ProjectConfig)[]) {
+      if (project[key] !== undefined) {
+        // Use type assertion to handle the assignment
+        (merged as Record<string, unknown>)[key] = project[key];
+      }
+    }
+  }
+
+  return merged;
+}

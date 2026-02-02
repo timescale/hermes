@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { file } from 'bun';
-import { projectConfig } from './config';
+import { readConfig } from './config';
 import { HASHED_SANDBOX_DOCKER_IMAGE } from './docker';
 import { log } from './logger';
 import {
@@ -96,7 +96,7 @@ export const checkOpencodeCredentials = async (
   if (exitCode || !numCreds) {
     return false;
   }
-  const effectiveModel = model ?? (await projectConfig.read())?.model;
+  const effectiveModel = model ?? (await readConfig())?.model;
   const proc2 = await runOpencodeInDocker({
     cmdArgs: [
       'run',
