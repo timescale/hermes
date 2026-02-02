@@ -139,22 +139,14 @@ export interface GenerateBranchNameOptions {
 }
 
 export async function generateBranchName(
-  promptOrOptions: string | GenerateBranchNameOptions,
-  onProgress?: (message: string) => void,
-  maxRetries: number = 3,
+  options: GenerateBranchNameOptions,
 ): Promise<string> {
-  // Support both old signature (prompt, onProgress, maxRetries) and new options object
-  const options: GenerateBranchNameOptions =
-    typeof promptOrOptions === 'string'
-      ? { prompt: promptOrOptions, onProgress, maxRetries }
-      : promptOrOptions;
-
   const {
     prompt,
     agent = 'claude',
     model,
-    onProgress: progressCallback = onProgress,
-    maxRetries: retries = maxRetries,
+    onProgress: progressCallback,
+    maxRetries = 3,
   } = options;
   // Gather all existing names to avoid conflicts
   const [existingBranches, existingServices, existingContainers] =
@@ -175,7 +167,7 @@ export async function generateBranchName(
   // Determine effective model - use fastest model for branch name generation if not specified
   const effectiveModel = model ?? (agent === 'claude' ? 'haiku' : undefined);
 
-  for (let attempt = 1; attempt <= retries; attempt++) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     let llmPrompt = `Generate a git branch name for the following task:
 
 <task>
