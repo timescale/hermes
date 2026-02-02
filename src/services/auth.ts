@@ -5,10 +5,10 @@
 import { chmod, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { YAML } from 'bun';
-import { hermesConfigDir } from './config';
+import { projectConfigDir } from './config';
 import { HASHED_SANDBOX_DOCKER_IMAGE } from './docker';
 
-const ghConfigDir = () => join(hermesConfigDir(), 'gh');
+const ghConfigDir = () => join(projectConfigDir(), 'gh');
 const GH_HOSTS_FILENAME = 'hosts.yml';
 export const ghConfigVolume = () => `${ghConfigDir()}:/home/agent/.config/gh`;
 

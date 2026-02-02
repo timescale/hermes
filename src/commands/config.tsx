@@ -21,8 +21,7 @@ import { checkClaudeCredentials, runClaudeInDocker } from '../services/claude';
 import {
   type AgentType,
   type HermesConfig,
-  readConfig,
-  writeConfig,
+  projectConfig,
 } from '../services/config';
 import {
   checkOpencodeCredentials,
@@ -59,7 +58,7 @@ export function ConfigWizard({
   skipToStep,
 }: ConfigWizardProps) {
   // Create all promises immediately (only once via useMemo)
-  const configPromise = useMemo(() => readConfig(), []);
+  const configPromise = useMemo(() => projectConfig.read(), []);
   const servicesPromise = useMemo(() => listServices(), []);
 
   const [step, setStep] = useState<
@@ -547,7 +546,7 @@ export async function configAction(): Promise<void> {
     // Ensure .gitignore has .hermes/ entry
     await ensureGitignore();
 
-    await writeConfig(config);
+    await projectConfig.write(config);
 
     console.log('\nConfiguration saved to .hermes/config.yml');
     console.log('\nSummary:');

@@ -3,7 +3,11 @@
 // ============================================================================
 
 import { create } from 'zustand';
-import { readConfigValue, writeConfigValue } from '../services/config.ts';
+import {
+  projectConfig,
+  readConfigValue,
+  userConfig,
+} from '../services/config.ts';
 import { log } from '../services/logger.ts';
 import {
   DEFAULT_THEME_NAME,
@@ -26,10 +30,19 @@ async function loadPersistedTheme(): Promise<string | null> {
   return null;
 }
 
-function persistTheme(themeName: string): void {
-  writeConfigValue('themeName', themeName).catch((error) => {
+async function persistTheme(themeName: string): Promise<void> {
+  try {
+    // If project config has a theme set, update project config
+    // Otherwise, update user config (default)
+    const projectTheme = await projectConfig.readValue('themeName');
+    if (projectTheme !== undefined) {
+      await projectConfig.writeValue('themeName', themeName);
+    } else {
+      await userConfig.writeValue('themeName', themeName);
+    }
+  } catch (error) {
     log.error({ error }, 'Failed to persist theme');
-  });
+  }
 }
 
 // ============================================================================

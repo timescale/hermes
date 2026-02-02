@@ -1,17 +1,21 @@
 // ============================================================================
-// Configuration Service - Read/write .hermes/config.yml file
+// Configuration Service - Read/write YAML config files
 // ============================================================================
 
-import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { YAML } from 'bun';
+import envPaths from 'env-paths';
 
-export const hermesConfigDir = () => join(process.cwd(), '.hermes');
-const CONFIG_FILENAME = 'config.yml';
-const configPath = () => join(hermesConfigDir(), CONFIG_FILENAME);
+// ============================================================================
+// Types
+// ============================================================================
 
 export type AgentType = 'claude' | 'opencode';
 
+/**
+ * Hermes configuration - all keys are valid at both user and project level.
+ * User config provides defaults, project config can override any value.
+ */
 export interface HermesConfig {
   // Tiger service ID to use as the default parent for database forks
   // null = explicitly "none" (skip DB fork by default)
@@ -28,57 +32,155 @@ export interface HermesConfig {
   themeName?: string;
 }
 
-/**
- * Read the .hermes/config.yml file from the current directory
- * Returns undefined if the file doesn't exist
- */
-export async function readConfig(): Promise<HermesConfig | undefined> {
-  const file = Bun.file(configPath());
-  if (!(await file.exists())) {
-    return undefined;
-  }
+// ============================================================================
+// Config Store Factory
+// ============================================================================
 
-  const content = await file.text();
-  const parsed = YAML.parse(content);
-
-  // Handle empty file or invalid YAML
-  if (!parsed || typeof parsed !== 'object') {
-    return {};
-  }
-
-  return parsed as HermesConfig;
+interface ConfigStoreOptions {
+  /** Function that returns the config directory path */
+  getConfigDir: () => string;
+  /** Header comment for the YAML file */
+  headerComment: string;
 }
 
-export const readConfigValue = async <K extends keyof HermesConfig>(
-  key: K,
-): Promise<HermesConfig[K] | undefined> => {
-  const config = await readConfig();
-  return config?.[key];
-};
+interface ConfigStore<T extends object> {
+  /** Get the config directory path */
+  getConfigDir: () => string;
+  /** Check if the config file exists */
+  exists: () => Promise<boolean>;
+  /** Read the entire config file */
+  read: () => Promise<T | undefined>;
+  /** Read a single config value */
+  readValue: <K extends keyof T>(key: K) => Promise<T[K] | undefined>;
+  /** Write the entire config file */
+  write: (config: T) => Promise<void>;
+  /** Write a single config value */
+  writeValue: <K extends keyof T>(key: K, value: T[K]) => Promise<void>;
+}
 
-/**
- * Write the .hermes/config.yml file to the current directory
- * Creates the .hermes directory if it doesn't exist
- */
-export async function writeConfig(config: HermesConfig): Promise<void> {
-  // Ensure .hermes directory exists
-  await mkdir(hermesConfigDir(), { recursive: true });
-  await Bun.write(
-    configPath(),
-    `# Hermes configuration
+const CONFIG_FILENAME = 'config.yml';
+
+function createConfigStore<T extends object>(
+  options: ConfigStoreOptions,
+): ConfigStore<T> {
+  const { getConfigDir, headerComment } = options;
+  const configPath = () => join(getConfigDir(), CONFIG_FILENAME);
+  const configFile = () => Bun.file(configPath());
+
+  const exists = async (): Promise<boolean> => configFile().exists();
+
+  const read = async (): Promise<T | undefined> => {
+    const file = configFile();
+    if (!(await file.exists())) {
+      return undefined;
+    }
+
+    const content = await file.text();
+    const parsed = YAML.parse(content);
+
+    // Handle empty file or invalid YAML
+    if (!parsed || typeof parsed !== 'object') {
+      return {} as T;
+    }
+
+    return parsed as T;
+  };
+
+  const readValue = async <K extends keyof T>(
+    key: K,
+  ): Promise<T[K] | undefined> => {
+    const config = await read();
+    return config?.[key];
+  };
+
+  const write = async (config: T): Promise<void> => {
+    await configFile().write(
+      `${headerComment}---\n${YAML.stringify(config, null, 2)}`,
+    );
+  };
+
+  const writeValue = async <K extends keyof T>(
+    key: K,
+    value: T[K],
+  ): Promise<void> =>
+    write({
+      ...((await read()) as T),
+      [key]: value,
+    });
+
+  return {
+    getConfigDir,
+    exists,
+    read,
+    readValue,
+    write,
+    writeValue,
+  };
+}
+
+// ============================================================================
+// Config Store Instances
+// ============================================================================
+
+/** Project config directory: .hermes/ in the current working directory */
+export const projectConfigDir = () => join(process.cwd(), '.hermes');
+
+/** User config directory: OS-specific config path (e.g., ~/.config/hermes on Linux) */
+const userConfigDir = () =>
+  process.env.HERMES_USER_CONFIG_DIR ||
+  envPaths('hermes', { suffix: '' }).config;
+
+/** Project-specific configuration stored in .hermes/config.yml */
+export const projectConfig = createConfigStore<HermesConfig>({
+  getConfigDir: projectConfigDir,
+  headerComment: `# Hermes project configuration
 # Generated by 'hermes config'
 # https://github.com/timescale/hermes
----
-${YAML.stringify(config, null, 2)}
 `,
-  );
+});
+
+/** User-level preferences stored in OS-specific config directory */
+export const userConfig = createConfigStore<HermesConfig>({
+  getConfigDir: userConfigDir,
+  headerComment: `# Hermes user preferences
+# https://github.com/timescale/hermes
+`,
+});
+
+// ============================================================================
+// Merged Config Reader
+// ============================================================================
+
+/**
+ * Read the effective/merged config.
+ *
+ * Config values are merged with project config taking precedence over user config.
+ * This allows users to set defaults in their user config (e.g., theme, preferred agent)
+ * while allowing per-project overrides.
+ *
+ * @returns The merged config (empty object if neither config file exists)
+ */
+export async function readConfig(): Promise<HermesConfig> {
+  const [user, project] = await Promise.all([
+    userConfig.read(),
+    projectConfig.read(),
+  ]);
+
+  return {
+    ...user,
+    ...project,
+  };
 }
 
-export const writeConfigValue = async <K extends keyof HermesConfig>(
+/**
+ * Read a single value from the merged config.
+ *
+ * @param key The config key to read
+ * @returns The value from merged config, or undefined if not set
+ */
+export async function readConfigValue<K extends keyof HermesConfig>(
   key: K,
-  value: HermesConfig[K],
-): Promise<void> => {
-  const config = (await readConfig()) || {};
-  config[key] = value;
-  await writeConfig(config);
-};
+): Promise<HermesConfig[K] | undefined> {
+  const config = await readConfig();
+  return config[key];
+}

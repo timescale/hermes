@@ -18,8 +18,8 @@ import { hasLocalGhAuth } from '../services/auth';
 import {
   type AgentType,
   type HermesConfig,
+  projectConfig,
   readConfig,
-  writeConfig,
 } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
 import {
@@ -370,12 +370,14 @@ function SessionsApp({
       }
 
       // Docker is ready, now check config
-      const existingConfig = await readConfig();
-      if (!existingConfig) {
+      // Check if project config exists (we need it to run the wizard if not)
+      if (!(await projectConfig.exists())) {
         setView({ type: 'config' });
         return;
       }
 
+      // Use merged config for runtime values
+      const existingConfig = await readConfig();
       setConfig(existingConfig);
 
       // Go to target view
@@ -418,10 +420,12 @@ function SessionsApp({
         return;
       }
 
-      // Save config
+      // Save config (project config)
       await ensureGitignore();
-      await writeConfig(result.config);
-      setConfig(result.config);
+      await projectConfig.write(result.config);
+      // Re-read merged config for runtime values
+      const mergedConfig = await readConfig();
+      setConfig(mergedConfig);
 
       // Go to target view
       const {

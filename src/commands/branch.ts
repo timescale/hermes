@@ -4,7 +4,7 @@
 
 import { Command } from 'commander';
 import { ensureGhAuth } from '../components/GhAuth.tsx';
-import { type AgentType, readConfig } from '../services/config';
+import { type AgentType, projectConfig, readConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
 import { ensureDockerSandbox, startContainer } from '../services/docker';
 import {
@@ -63,19 +63,20 @@ export async function branchAction(
   // Step 1: Ensure .gitignore has .hermes/ entry
   await ensureGitignore();
 
-  // Step 2: Read config for defaults, run config wizard if no config exists
-  let config = await readConfig();
-  if (!config) {
-    console.log('No config found. Running config wizard...\n');
+  // Step 2: Read merged config for defaults, run config wizard if no project config exists
+  if (!(await projectConfig.exists())) {
+    console.log('No project config found. Running config wizard...\n');
     await configAction();
-    // Re-read config after config wizard
-    config = await readConfig();
-    if (!config) {
+    // Verify project config was created
+    if (!(await projectConfig.exists())) {
       console.error('Config was cancelled or failed. Cannot continue.');
       process.exit(1);
     }
     console.log(''); // blank line after config
   }
+
+  // Read merged config for effective values
+  const config = await readConfig();
 
   // Step 3: Determine effective values from options or config
   const effectiveServiceId = options.serviceId ?? config.tigerServiceId;
