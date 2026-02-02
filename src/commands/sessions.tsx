@@ -34,7 +34,12 @@ import {
   startContainer,
   startShellContainer,
 } from '../services/docker';
-import { generateBranchName, getRepoInfo } from '../services/git';
+import {
+  generateBranchName,
+  getRepoInfo,
+  type RepoInfo,
+  tryGetRepoInfo,
+} from '../services/git';
 import { log } from '../services/logger';
 import { createTui } from '../services/tui.ts';
 import { ensureGitignore } from '../utils';
@@ -52,6 +57,12 @@ type SessionsView =
       type: 'starting';
       prompt: string;
       agent: AgentType;
+      model: string;
+      step: string;
+    }
+  | {
+      type: 'resuming';
+      session: HermesSession;
       model: string;
       step: string;
     }
@@ -101,6 +112,8 @@ interface SessionsAppProps {
   initialModel?: string;
   serviceId?: string;
   dbFork?: boolean;
+  /** Current repo info if in a git repo, null otherwise */
+  currentRepoInfo: RepoInfo | null;
   onComplete: (result: SessionsResult) => void;
 }
 
@@ -111,6 +124,7 @@ function SessionsApp({
   initialModel,
   serviceId,
   dbFork = true,
+  currentRepoInfo,
   onComplete,
 }: SessionsAppProps) {
   const [view, setView] = useState<SessionsView>({ type: 'init' });
@@ -184,7 +198,11 @@ function SessionsApp({
         setView((v) =>
           v.type === 'starting' ? { ...v, step: 'Generating branch name' } : v,
         );
-        const branchName = await generateBranchName(prompt);
+        const branchName = await generateBranchName({
+          prompt,
+          agent,
+          model,
+        });
 
         await ensureGitignore();
 
@@ -252,6 +270,87 @@ function SessionsApp({
           'error',
         );
         setView({ type: 'prompt' });
+      }
+    },
+    [showToast, onComplete],
+  );
+
+  // Resume session function - handles the full flow of resuming an agent
+  const resumeSessionFlow = useCallback(
+    async (
+      session: HermesSession,
+      prompt: string,
+      model: string,
+      mode: SubmitMode = 'async',
+    ) => {
+      try {
+        log.debug(
+          { session: session.name, model, prompt, mode },
+          'resumeSessionFlow received',
+        );
+
+        setView({
+          type: 'resuming',
+          session,
+          model,
+          step: 'Preparing to resume session',
+        });
+
+        // For interactive mode, exit TUI and let the caller resume the container
+        if (mode === 'interactive') {
+          setView((v) =>
+            v.type === 'resuming'
+              ? { ...v, step: 'Starting interactive session' }
+              : v,
+          );
+          onComplete({
+            type: 'resume',
+            containerId: session.containerId,
+            resumeModel: model,
+          });
+          return;
+        }
+
+        // Detached resume - create commit image and start new container
+        setView((v) =>
+          v.type === 'resuming'
+            ? { ...v, step: 'Creating session snapshot' }
+            : v,
+        );
+
+        // Small delay to ensure UI updates before the potentially slow operation
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        setView((v) =>
+          v.type === 'resuming'
+            ? { ...v, step: 'Starting resumed container' }
+            : v,
+        );
+
+        const newContainerId = await resumeSession(session.containerId, {
+          mode: 'detached',
+          prompt,
+          model,
+        });
+
+        setView((v) =>
+          v.type === 'resuming' ? { ...v, step: 'Loading session' } : v,
+        );
+
+        // Fetch the newly created session and show its detail
+        const newSession = await getSession(newContainerId);
+        if (newSession) {
+          setView({ type: 'detail', session: newSession });
+        } else {
+          setView({ type: 'list' });
+        }
+      } catch (err) {
+        log.error({ err }, 'Failed to resume session');
+        showToast(
+          `Failed to resume: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
+        setView({ type: 'prompt', resumeSession: session });
       }
     },
     [showToast, onComplete],
@@ -419,29 +518,8 @@ function SessionsApp({
           resumeSession={resumeSess}
           onSubmit={({ prompt, agent, model, mode }) => {
             if (resumeSess) {
-              // Resume flow
-              if (mode === 'interactive') {
-                onComplete({
-                  type: 'resume',
-                  containerId: resumeSess.containerId,
-                  resumeModel: model,
-                });
-              } else {
-                // Detached resume - then navigate to the new session's detail view
-                resumeSession(resumeSess.containerId, {
-                  mode: 'detached',
-                  prompt,
-                  model,
-                }).then(async (newContainerId) => {
-                  // Fetch the newly created session and show its detail
-                  const newSession = await getSession(newContainerId);
-                  if (newSession) {
-                    setView({ type: 'detail', session: newSession });
-                  } else {
-                    setView({ type: 'list' });
-                  }
-                });
-              }
+              // Resume flow - use resumeSessionFlow for loading screen
+              resumeSessionFlow(resumeSess, prompt, model, mode);
             } else {
               // Fresh session
               startSession(prompt, agent, model, mode);
@@ -474,7 +552,7 @@ function SessionsApp({
   }
 
   // ---- Starting Screen View ----
-  if (view.type === 'starting') {
+  if (view.type === 'starting' || view.type === 'resuming') {
     return (
       <>
         <StartingScreen step={view.step} />
@@ -501,6 +579,7 @@ function SessionsApp({
           }
           onResume={handleResume}
           onSessionDeleted={() => setView({ type: 'list' })}
+          onNewPrompt={() => setView({ type: 'prompt' })}
         />
         {toast && (
           <Toast
@@ -520,6 +599,7 @@ function SessionsApp({
         onSelect={(session) => setView({ type: 'detail', session })}
         onQuit={() => onComplete({ type: 'quit' })}
         onNewTask={() => setView({ type: 'prompt' })}
+        currentRepo={currentRepoInfo?.fullName}
       />
       {toast && (
         <Toast
@@ -547,6 +627,9 @@ export async function runSessionsTui({
   await ensureDockerSandbox();
   await ensureGhAuth();
 
+  // Try to detect current repo (returns null if not in a git repo)
+  const currentRepoInfo = await tryGetRepoInfo();
+
   let resolveResult: (result: SessionsResult) => void;
   const resultPromise = new Promise<SessionsResult>((resolve) => {
     resolveResult = resolve;
@@ -563,6 +646,7 @@ export async function runSessionsTui({
         initialModel={initialModel}
         serviceId={serviceId}
         dbFork={dbFork}
+        currentRepoInfo={currentRepoInfo}
         onComplete={(result) => resolveResult(result)}
       />
     </CopyOnSelect>,

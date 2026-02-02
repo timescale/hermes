@@ -60,20 +60,10 @@ export async function branchAction(
   await ensureDockerSandbox();
   await ensureGhAuth();
 
-  // Step 1: Get repo info
-  console.log('Getting repository info...');
-  const repoInfo = await getRepoInfo();
-  console.log(`  Repository: ${repoInfo.fullName}`);
-
-  // Step 2: Generate branch name
-  console.log('Generating branch name...');
-  const branchName = await generateBranchName(prompt, console.log);
-  console.log(`  Branch name: ${branchName}`);
-
-  // Step 3: Ensure .gitignore has .hermes/ entry
+  // Step 1: Ensure .gitignore has .hermes/ entry
   await ensureGitignore();
 
-  // Step 4: Read merged config for defaults, run config wizard if no project config exists
+  // Step 2: Read merged config for defaults, run config wizard if no project config exists
   if (!(await projectConfig.exists())) {
     console.log('No project config found. Running config wizard...\n');
     await configAction();
@@ -88,10 +78,25 @@ export async function branchAction(
   // Read merged config for effective values
   const config = await readConfig();
 
-  // Step 5: Determine effective values from options or config
+  // Step 3: Determine effective values from options or config
   const effectiveServiceId = options.serviceId ?? config.tigerServiceId;
   const effectiveAgent: AgentType = options.agent ?? config.agent ?? 'opencode';
   const effectiveModel: string | undefined = options.model ?? config.model;
+
+  // Step 4: Get repo info
+  console.log('Getting repository info...');
+  const repoInfo = await getRepoInfo();
+  console.log(`  Repository: ${repoInfo.fullName}`);
+
+  // Step 5: Generate branch name using configured agent and model
+  console.log('Generating branch name...');
+  const branchName = await generateBranchName({
+    prompt,
+    agent: effectiveAgent,
+    model: effectiveModel,
+    onProgress: console.log,
+  });
+  console.log(`  Branch name: ${branchName}`);
 
   // Step 6: Fork database (only if explicitly configured with a service ID)
   let forkResult: ForkResult | null = null;
