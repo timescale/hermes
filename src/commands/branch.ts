@@ -4,12 +4,7 @@
 
 import { Command } from 'commander';
 import { ensureGhAuth } from '../components/GhAuth.tsx';
-import {
-  type AgentType,
-  type Config,
-  projectConfig,
-  readConfig,
-} from '../services/config';
+import { type AgentType, projectConfig, readConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
 import { ensureDockerSandbox, startContainer } from '../services/docker';
 import {
@@ -79,25 +74,26 @@ export async function branchAction(
   await ensureGitignore();
 
   // Step 4: Read merged config for defaults, run config wizard if no project config exists
-  let config: Config | undefined = await readConfig();
   const projectCfg = await projectConfig.read();
   if (!projectCfg) {
     console.log('No project config found. Running config wizard...\n');
     await configAction();
-    // Re-read merged config after config wizard
-    config = await readConfig();
-    if (!config) {
+    // Verify project config was created
+    const newProjectCfg = await projectConfig.read();
+    if (!newProjectCfg) {
       console.error('Config was cancelled or failed. Cannot continue.');
       process.exit(1);
     }
     console.log(''); // blank line after config
   }
 
+  // Read merged config for effective values
+  const config = await readConfig();
+
   // Step 5: Determine effective values from options or config
-  const effectiveServiceId = options.serviceId ?? config?.tigerServiceId;
-  const effectiveAgent: AgentType =
-    options.agent ?? config?.agent ?? 'opencode';
-  const effectiveModel: string | undefined = options.model ?? config?.model;
+  const effectiveServiceId = options.serviceId ?? config.tigerServiceId;
+  const effectiveAgent: AgentType = options.agent ?? config.agent ?? 'opencode';
+  const effectiveModel: string | undefined = options.model ?? config.model;
 
   // Step 6: Fork database (only if explicitly configured with a service ID)
   let forkResult: ForkResult | null = null;

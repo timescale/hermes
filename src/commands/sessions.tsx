@@ -280,7 +280,7 @@ function SessionsApp({
 
       // Use merged config for runtime values
       const existingConfig = await readConfig();
-      setConfig(existingConfig ?? null);
+      setConfig(existingConfig);
 
       // Go to target view
       const {
@@ -291,8 +291,8 @@ function SessionsApp({
       } = propsRef.current;
 
       if (targetView === 'starting' && prompt) {
-        const agent = initialAgent ?? existingConfig?.agent ?? 'opencode';
-        const model = initialModel ?? existingConfig?.model ?? '';
+        const agent = initialAgent ?? existingConfig.agent ?? 'opencode';
+        const model = initialModel ?? existingConfig.model ?? '';
         startSession(prompt, agent, model);
       } else if (targetView === 'prompt') {
         setView({ type: 'prompt' });
@@ -327,7 +327,7 @@ function SessionsApp({
       await projectConfig.write(result.config);
       // Re-read merged config for runtime values
       const mergedConfig = await readConfig();
-      setConfig(mergedConfig ?? null);
+      setConfig(mergedConfig);
 
       // Go to target view
       const {

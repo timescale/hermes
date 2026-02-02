@@ -366,9 +366,9 @@ describe('readConfig (merged config)', () => {
     }
   });
 
-  test('returns undefined when neither config exists', async () => {
+  test('returns empty object when neither config exists', async () => {
     const config = await readConfig();
-    expect(config).toBeUndefined();
+    expect(config).toEqual({});
   });
 
   test('returns user config when only user config exists', async () => {

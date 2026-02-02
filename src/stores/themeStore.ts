@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { create } from 'zustand';
-import { readConfig, userConfig } from '../services/config.ts';
+import { readConfigValue, userConfig } from '../services/config.ts';
 import { log } from '../services/logger.ts';
 import {
   DEFAULT_THEME_NAME,
@@ -18,8 +18,7 @@ import {
 
 async function loadPersistedTheme(): Promise<string | null> {
   try {
-    // Read from merged config (user config can be overridden by project config)
-    return (await readConfig())?.themeName || null;
+    return (await readConfigValue('themeName')) || null;
   } catch (error) {
     log.error({ error }, 'Failed to load persisted theme');
     // Ignore errors, use default
