@@ -215,7 +215,7 @@ export function SessionDetail({
     const branchName = `hermes/${session.branch}`;
     setActionInProgress(true);
     try {
-      await Bun.$`git switch ${branchName}`.quiet();
+      await Bun.$`git fetch && git switch ${branchName}`.quiet();
       showToast(`Switched to branch ${branchName}`, 'success');
     } catch (err) {
       const formattedError = formatShellError(err as ShellError);
