@@ -74,13 +74,11 @@ export async function branchAction(
   await ensureGitignore();
 
   // Step 4: Read merged config for defaults, run config wizard if no project config exists
-  const projectCfg = await projectConfig.read();
-  if (!projectCfg) {
+  if (!(await projectConfig.exists())) {
     console.log('No project config found. Running config wizard...\n');
     await configAction();
     // Verify project config was created
-    const newProjectCfg = await projectConfig.read();
-    if (!newProjectCfg) {
+    if (!(await projectConfig.exists())) {
       console.error('Config was cancelled or failed. Cannot continue.');
       process.exit(1);
     }

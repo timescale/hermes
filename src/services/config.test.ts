@@ -31,6 +31,21 @@ describe('projectConfig', () => {
     }
   });
 
+  describe('exists', () => {
+    test('returns false when config file does not exist', async () => {
+      const exists = await projectConfig.exists();
+      expect(exists).toBe(false);
+    });
+
+    test('returns true when config file exists', async () => {
+      await mkdir('.hermes', { recursive: true });
+      await Bun.write('.hermes/config.yml', 'agent: claude\n');
+
+      const exists = await projectConfig.exists();
+      expect(exists).toBe(true);
+    });
+  });
+
   describe('read', () => {
     test('returns undefined when config file does not exist', async () => {
       const config = await projectConfig.read();

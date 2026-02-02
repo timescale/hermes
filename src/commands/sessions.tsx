@@ -272,8 +272,7 @@ function SessionsApp({
 
       // Docker is ready, now check config
       // Check if project config exists (we need it to run the wizard if not)
-      const existingProjectConfig = await projectConfig.read();
-      if (!existingProjectConfig) {
+      if (!(await projectConfig.exists())) {
         setView({ type: 'config' });
         return;
       }

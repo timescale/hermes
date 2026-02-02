@@ -52,6 +52,8 @@ interface ConfigStoreOptions {
 interface ConfigStore<T extends object> {
   /** Get the config directory path */
   getConfigDir: () => string;
+  /** Check if the config file exists */
+  exists: () => Promise<boolean>;
   /** Read the entire config file */
   read: () => Promise<T | undefined>;
   /** Read a single config value */
@@ -69,6 +71,11 @@ function createConfigStore<T extends object>(
 ): ConfigStore<T> {
   const { getConfigDir, headerComment } = options;
   const configPath = () => join(getConfigDir(), CONFIG_FILENAME);
+
+  const exists = async (): Promise<boolean> => {
+    const file = Bun.file(configPath());
+    return file.exists();
+  };
 
   const read = async (): Promise<T | undefined> => {
     const file = Bun.file(configPath());
@@ -113,6 +120,7 @@ function createConfigStore<T extends object>(
 
   return {
     getConfigDir,
+    exists,
     read,
     readValue,
     write,
