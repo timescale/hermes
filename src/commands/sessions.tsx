@@ -15,6 +15,7 @@ import { SessionsList } from '../components/SessionsList';
 import { StartingScreen } from '../components/StartingScreen';
 import { Toast, type ToastType } from '../components/Toast';
 import { hasLocalGhAuth } from '../services/auth';
+import { checkClaudeCredentials, runClaudeInDocker } from '../services/claude';
 import {
   type AgentType,
   type HermesConfig,
@@ -41,6 +42,10 @@ import {
   tryGetRepoInfo,
 } from '../services/git';
 import { log } from '../services/logger';
+import {
+  checkOpencodeCredentials,
+  runOpencodeInDocker,
+} from '../services/opencode';
 import { createTui } from '../services/tui.ts';
 import { ensureGitignore } from '../utils';
 
@@ -70,7 +75,13 @@ type SessionsView =
   | { type: 'list' };
 
 interface SessionsResult {
-  type: 'quit' | 'attach' | 'resume' | 'start-interactive' | 'shell';
+  type:
+    | 'quit'
+    | 'attach'
+    | 'resume'
+    | 'start-interactive'
+    | 'shell'
+    | 'needs-agent-auth';
   containerId?: string;
   // For resume: optional model override
   resumeModel?: string;
@@ -87,6 +98,13 @@ interface SessionsResult {
     model: string;
     branchName: string;
     envVars?: Record<string, string>;
+    mountDir?: string;
+  };
+  // For needs-agent-auth: info needed to retry after login
+  authInfo?: {
+    agent: AgentType;
+    model: string;
+    prompt: string;
     mountDir?: string;
   };
 }
@@ -236,6 +254,31 @@ function SessionsApp({
           throw new Error(
             'GitHub authentication not configured. Run `hermes config` to set up.',
           );
+        }
+
+        // Check agent credentials before starting container
+        setView((v) =>
+          v.type === 'starting'
+            ? { ...v, step: `Checking ${agent} credentials` }
+            : v,
+        );
+        const agentAuthValid =
+          agent === 'claude'
+            ? await checkClaudeCredentials(model || undefined)
+            : await checkOpencodeCredentials(model || undefined);
+
+        if (!agentAuthValid) {
+          // Exit TUI to run interactive login, then retry
+          onComplete({
+            type: 'needs-agent-auth',
+            authInfo: {
+              agent,
+              model,
+              prompt,
+              mountDir,
+            },
+          });
+          return;
         }
 
         // For interactive mode, exit TUI and let the caller start the container
@@ -747,6 +790,56 @@ export async function runSessionsTui({
       log.error({ err }, 'Failed to start session interactively');
       console.error(`Failed to start: ${err}`);
     }
+  }
+
+  // Handle needs-agent-auth action - run interactive login and retry
+  if (result.type === 'needs-agent-auth' && result.authInfo) {
+    const { agent, model, prompt, mountDir: authMountDir } = result.authInfo;
+    const agentName = agent === 'claude' ? 'Claude' : 'Opencode';
+
+    console.log(`\n${agentName} credentials are missing or expired.`);
+    console.log(`Starting ${agentName} login...\n`);
+
+    const proc =
+      agent === 'claude'
+        ? await runClaudeInDocker({ cmdArgs: ['/login'], interactive: true })
+        : await runOpencodeInDocker({
+            cmdArgs: ['auth', 'login'],
+            interactive: true,
+          });
+
+    const exitCode = await proc.exited;
+
+    if (exitCode !== 0) {
+      console.error(`\nError: ${agentName} login failed`);
+      process.exit(1);
+    }
+
+    // Verify credentials after login
+    const authValid =
+      agent === 'claude'
+        ? await checkClaudeCredentials(model || undefined)
+        : await checkOpencodeCredentials(model || undefined);
+
+    if (!authValid) {
+      console.error(
+        `\nError: ${agentName} credentials still invalid after login`,
+      );
+      process.exit(1);
+    }
+
+    console.log(`\n${agentName} login successful. Resuming...\n`);
+
+    // Re-run the TUI with the same parameters to continue where we left off
+    await runSessionsTui({
+      initialView: 'starting',
+      initialPrompt: prompt,
+      initialAgent: agent,
+      initialModel: model,
+      serviceId,
+      dbFork,
+      mountDir: authMountDir,
+    });
   }
 }
 

@@ -17,11 +17,11 @@ import SLIM_DOCKERFILE from '../../sandbox/slim.Dockerfile' with {
 import { runDockerSetupScreen } from '../components/DockerSetup';
 import { formatShellError, type ShellError } from '../utils';
 import { ghConfigVolume } from './auth';
-import { CLAUDE_CONFIG_VOLUME } from './claude';
+import { getClaudeConfigVolume } from './claude';
 import { type AgentType, readConfig } from './config';
 import type { RepoInfo } from './git';
 import { log } from './logger';
-import { OPENCODE_CONFIG_VOLUME } from './opencode';
+import { getOpencodeConfigVolume } from './opencode';
 import { runInDocker } from './runInDocker';
 
 /**
@@ -35,6 +35,20 @@ function base64Encode(text: string): string {
 
 const toVolumeArgs = (volumes: string[]): string[] =>
   volumes.flatMap((v) => ['-v', v]);
+
+/**
+ * Build the list of credential volume mounts for agent containers.
+ * Ensures credential files exist (creating empty JSON files if needed)
+ * so Docker mounts them as files, not directories.
+ */
+const getCredentialVolumes = async (): Promise<string[]> => {
+  const [claudeVolume, opencodeVolume] = await Promise.all([
+    getClaudeConfigVolume(),
+    getOpencodeConfigVolume(),
+  ]);
+
+  return [claudeVolume, opencodeVolume, ghConfigVolume()];
+};
 
 const escapePrompt = (cmd: string, prompt?: string | null): string =>
   prompt
@@ -846,11 +860,7 @@ export async function resumeSession(
 
   // Mount config volumes for agent credentials and session continuity
   // If mountDir is provided, add it as a volume mount
-  const volumes = [
-    CLAUDE_CONFIG_VOLUME,
-    OPENCODE_CONFIG_VOLUME,
-    ghConfigVolume(),
-  ];
+  const volumes = await getCredentialVolumes();
 
   // Resolve mount directory to absolute path if provided
   const absoluteMountDir = options.mountDir
@@ -1072,11 +1082,7 @@ export async function startContainer(
   }
 
   // Build volume arguments - config volumes plus optional mount
-  const volumes = [
-    CLAUDE_CONFIG_VOLUME,
-    OPENCODE_CONFIG_VOLUME,
-    ghConfigVolume(),
-  ];
+  const volumes = await getCredentialVolumes();
 
   // Resolve mount directory to absolute path if provided
   const absoluteMountDir = mountDir ? resolve(mountDir) : undefined;
@@ -1246,11 +1252,7 @@ export async function startShellContainer(
   }
 
   // Build volume arguments - config volumes plus optional mount
-  const volumes = [
-    CLAUDE_CONFIG_VOLUME,
-    OPENCODE_CONFIG_VOLUME,
-    ghConfigVolume(),
-  ];
+  const volumes = await getCredentialVolumes();
 
   // Resolve mount directory to absolute path if provided
   const absoluteMountDir = mountDir ? resolve(mountDir) : undefined;

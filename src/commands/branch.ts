@@ -4,6 +4,7 @@
 
 import { Command } from 'commander';
 import { ensureGhAuth } from '../components/GhAuth.tsx';
+import { ensureClaudeAuth } from '../services/claude';
 import { type AgentType, projectConfig, readConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
 import { ensureDockerSandbox, startContainer } from '../services/docker';
@@ -12,6 +13,7 @@ import {
   getRepoInfo,
   type RepoInfo,
 } from '../services/git';
+import { ensureOpencodeAuth } from '../services/opencode';
 import { ensureGitignore } from '../utils';
 import { configAction } from './config';
 
@@ -113,7 +115,21 @@ export async function branchAction(
     console.log(`  Database fork created: ${forkResult.name}`);
   }
 
-  // Step 9: Start container (repo will be cloned or mounted)
+  // Step 7: Ensure agent credentials are valid
+  console.log(`Checking ${effectiveAgent} credentials...`);
+  const authValid =
+    effectiveAgent === 'claude'
+      ? await ensureClaudeAuth(effectiveModel)
+      : await ensureOpencodeAuth(effectiveModel);
+
+  if (!authValid) {
+    console.error(
+      `\nError: ${effectiveAgent} credentials are invalid. Cannot start agent.`,
+    );
+    process.exit(1);
+  }
+
+  // Step 8: Start container (repo will be cloned or mounted)
   // Resolve mount directory: true means cwd, string means specific path
   const mountDir =
     options.mount === true
