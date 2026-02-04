@@ -4,6 +4,7 @@
 
 import { program } from 'commander';
 import packageJson from '../package.json' with { type: 'json' };
+import { authCommand } from './commands/auth';
 import {
   branchAction,
   branchCommand,
@@ -61,6 +62,7 @@ withBranchOptions(program)
   });
 
 // Add subcommands (after root options so they take precedence)
+program.addCommand(authCommand);
 program.addCommand(branchCommand);
 program.addCommand(claudeCommand);
 program.addCommand(configCommand);
