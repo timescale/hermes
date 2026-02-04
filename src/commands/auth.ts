@@ -1,6 +1,7 @@
 // Pass-through to the claude CLI, running in docker
 
 import { Command } from 'commander';
+import { ensureGhAuth } from '../components/GhAuth';
 import { checkClaudeCredentials, ensureClaudeAuth } from '../services/claude';
 import { ensureDockerSandbox } from '../services/docker';
 import { checkGhCredentials } from '../services/gh';
@@ -10,7 +11,6 @@ import {
   ensureOpencodeAuth,
 } from '../services/opencode';
 import type { ShellError } from '../utils';
-import { ensureGhAuth } from '../components/GhAuth';
 
 export const authCommand = new Command('auth').description(
   'Manage authentication tokens',

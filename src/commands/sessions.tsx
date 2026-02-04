@@ -595,7 +595,7 @@ function SessionsApp({
               startSession(prompt, agent, model, mode, mountDir);
             }
           }}
-          onShell={() => {
+          onShell={(shellMountDir) => {
             if (resumeSess) {
               // Shell on resumed container
               onComplete({
@@ -604,7 +604,7 @@ function SessionsApp({
               });
             } else {
               // Fresh shell container
-              onComplete({ type: 'shell' });
+              onComplete({ type: 'shell', shellMountDir });
             }
           }}
           onCancel={() => onComplete({ type: 'quit' })}
@@ -755,7 +755,7 @@ export async function runSessionsTui({
       } else {
         // Fresh shell container
         const repoInfo = await getRepoInfo();
-        await startShellContainer({ repoInfo });
+        await startShellContainer({ repoInfo, mountDir: result.shellMountDir });
       }
     } catch (err) {
       log.error({ err }, 'Failed to start shell');

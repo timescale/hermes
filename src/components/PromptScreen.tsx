@@ -46,7 +46,7 @@ export interface PromptScreenProps {
     /** If set, mount this directory instead of git clone */
     mountDir?: string;
   }) => void;
-  onShell: () => void; // Launch bash shell
+  onShell: (mountDir?: string) => void; // Launch bash shell
   onCancel: () => void;
   onViewSessions?: () => void;
 }
@@ -361,7 +361,7 @@ export function PromptScreen({
     }
 
     if (key.name === 'b' && key.ctrl) {
-      onShell();
+      onShell(mountMode ? (mountDir ?? undefined) : undefined);
       return;
     }
 
