@@ -8,6 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   git \
   curl \
   ca-certificates \
+  zip \
+  unzip \
+  tar \
+  gzip \
   jq \
   && rm -rf /var/lib/apt/lists/*
 
