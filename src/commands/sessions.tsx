@@ -206,11 +206,11 @@ function SessionsApp({
       agent: AgentType,
       model: string,
       mode: SubmitMode = 'async',
-      mountDir?: string,
+      passedMountDir?: string,
     ) => {
       try {
         log.debug(
-          { agent, model, prompt, mode, mountDir },
+          { agent, model, prompt, mode, mountDir: passedMountDir },
           'startSession received',
         );
 
@@ -247,6 +247,10 @@ function SessionsApp({
             : await checkOpencodeCredentials(model || undefined);
 
         const { isGitRepo: inGitRepo } = propsRef.current;
+
+        // Force mount mode if not in a git repo
+        const mountDir =
+          passedMountDir ?? (!inGitRepo ? process.cwd() : undefined);
 
         if (!agentAuthValid) {
           // Exit TUI to run interactive login, then retry
