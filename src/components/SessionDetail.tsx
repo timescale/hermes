@@ -2,6 +2,7 @@ import { useKeyboard } from '@opentui/react';
 import open from 'open';
 import { useCallback, useEffect, useState } from 'react';
 import { useWindowSize } from '../hooks/useWindowSize';
+import { copyToClipboard } from '../services/clipboard';
 import {
   getSession,
   type HermesSession,
@@ -107,6 +108,8 @@ export function SessionDetail({
 
   // Hover state for PR indicator
   const [prHovered, setPrHovered] = useState(false);
+  // Hover state for prompt box
+  const [promptHovered, setPromptHovered] = useState(false);
 
   // Fetch PR info if not cached or stale
   const fetchPrInfo = useCallback(async () => {
@@ -191,6 +194,18 @@ export function SessionDetail({
     },
     [showToast],
   );
+
+  // Handle prompt click to copy to clipboard
+  const handlePromptClick = useCallback(() => {
+    if (session.prompt) {
+      copyToClipboard(session.prompt);
+      setToast({
+        message: 'Prompt copied to clipboard',
+        type: 'info',
+        duration: 1500,
+      });
+    }
+  }, [session.prompt]);
 
   // Handle PR click
   const handlePrClick = useCallback(() => {
@@ -356,6 +371,12 @@ export function SessionDetail({
         borderStyle="single"
         height={3}
         marginTop={isTall ? 1 : 0}
+        backgroundColor={
+          promptHovered && session.prompt ? theme.backgroundElement : undefined
+        }
+        onMouseDown={handlePromptClick}
+        onMouseOver={() => setPromptHovered(true)}
+        onMouseOut={() => setPromptHovered(false)}
       >
         <text fg={theme.text} height={1} overflow="scroll">
           {session.prompt || '(no prompt)'}
