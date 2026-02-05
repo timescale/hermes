@@ -91,6 +91,8 @@ interface SessionsResult {
   resumeContainerId?: string;
   // For shell: optional mount directory for fresh shell
   shellMountDir?: string;
+  // For shell: whether running from a git repo
+  shellIsGitRepo?: boolean;
   // For start-interactive: info needed to start the container
   startInfo?: {
     prompt: string;
@@ -99,6 +101,7 @@ interface SessionsResult {
     branchName: string;
     envVars?: Record<string, string>;
     mountDir?: string;
+    isGitRepo?: boolean;
   };
   // For needs-agent-auth: info needed to retry after login
   authInfo?: {
@@ -106,6 +109,7 @@ interface SessionsResult {
     model: string;
     prompt: string;
     mountDir?: string;
+    isGitRepo?: boolean;
   };
 }
 
@@ -124,6 +128,8 @@ export interface RunSessionsTuiOptions {
   dbFork?: boolean;
   /** Mount local directory instead of git clone */
   mountDir?: string;
+  /** Whether running from a git repository (affects git/gh operations) */
+  isGitRepo?: boolean;
 }
 
 // ============================================================================
@@ -141,6 +147,8 @@ interface SessionsAppProps {
   initialMountDir?: string;
   /** Current repo info if in a git repo, null otherwise */
   currentRepoInfo: RepoInfo | null;
+  /** Whether running from a git repository (affects git/gh operations) */
+  isGitRepo: boolean;
   onComplete: (result: SessionsResult) => void;
 }
 
@@ -153,6 +161,7 @@ function SessionsApp({
   dbFork = true,
   initialMountDir,
   currentRepoInfo,
+  isGitRepo,
   onComplete,
 }: SessionsAppProps) {
   const [view, setView] = useState<SessionsView>({ type: 'init' });
@@ -170,6 +179,7 @@ function SessionsApp({
     serviceId,
     dbFork,
     initialMountDir,
+    isGitRepo,
   });
 
   // Keep refs up to date
@@ -182,6 +192,7 @@ function SessionsApp({
     serviceId,
     dbFork,
     initialMountDir,
+    isGitRepo,
   };
 
   const showToast = useCallback((message: string, type: ToastType) => {
@@ -235,6 +246,8 @@ function SessionsApp({
             ? await checkClaudeCredentials(model || undefined)
             : await checkOpencodeCredentials(model || undefined);
 
+        const { isGitRepo: inGitRepo } = propsRef.current;
+
         if (!agentAuthValid) {
           // Exit TUI to run interactive login, then retry
           onComplete({
@@ -244,15 +257,22 @@ function SessionsApp({
               model,
               prompt,
               mountDir,
+              isGitRepo: inGitRepo,
             },
           });
           return;
         }
 
-        setView((v) =>
-          v.type === 'starting' ? { ...v, step: 'Getting repository info' } : v,
-        );
-        const repoInfo = await getRepoInfo();
+        // Get repo info only if in a git repo
+        let repoInfo: RepoInfo | null = null;
+        if (inGitRepo) {
+          setView((v) =>
+            v.type === 'starting'
+              ? { ...v, step: 'Getting repository info' }
+              : v,
+          );
+          repoInfo = await getRepoInfo();
+        }
 
         setView((v) =>
           v.type === 'starting' ? { ...v, step: 'Generating branch name' } : v,
@@ -263,7 +283,10 @@ function SessionsApp({
           model,
         });
 
-        await ensureGitignore();
+        // Only ensure gitignore if in a git repo
+        if (inGitRepo) {
+          await ensureGitignore();
+        }
 
         const { serviceId: svcId, dbFork: doFork } = propsRef.current;
         const effectiveServiceId = svcId ?? configRef.current?.tigerServiceId;
@@ -275,7 +298,8 @@ function SessionsApp({
           forkResult = await forkDatabase(branchName, effectiveServiceId);
         }
 
-        if (!(await checkGhCredentials())) {
+        // Only check GitHub credentials if in a git repo
+        if (inGitRepo && !(await checkGhCredentials())) {
           throw new Error(
             'GitHub authentication not configured. Run `hermes config` to set up.',
           );
@@ -292,6 +316,7 @@ function SessionsApp({
               branchName,
               envVars: forkResult?.envVars,
               mountDir,
+              isGitRepo: inGitRepo,
             },
           });
           return;
@@ -317,6 +342,7 @@ function SessionsApp({
           interactive: false,
           envVars: forkResult?.envVars,
           mountDir,
+          isGitRepo: inGitRepo,
         });
 
         setView((v) =>
@@ -604,7 +630,11 @@ function SessionsApp({
               });
             } else {
               // Fresh shell container
-              onComplete({ type: 'shell', shellMountDir });
+              onComplete({
+                type: 'shell',
+                shellMountDir,
+                shellIsGitRepo: propsRef.current.isGitRepo,
+              });
             }
           }}
           onCancel={() => onComplete({ type: 'quit' })}
@@ -694,12 +724,19 @@ export async function runSessionsTui({
   serviceId,
   dbFork,
   mountDir,
+  isGitRepo,
 }: RunSessionsTuiOptions = {}): Promise<void> {
   await ensureDockerSandbox();
-  await ensureGhAuth();
 
   // Try to detect current repo (returns null if not in a git repo)
   const currentRepoInfo = await tryGetRepoInfo();
+  // Use passed isGitRepo if provided, otherwise detect from currentRepoInfo
+  const effectiveIsGitRepo = isGitRepo ?? currentRepoInfo !== null;
+
+  // Only require GitHub auth if in a git repo
+  if (effectiveIsGitRepo) {
+    await ensureGhAuth();
+  }
 
   let resolveResult: (result: SessionsResult) => void;
   const resultPromise = new Promise<SessionsResult>((resolve) => {
@@ -719,6 +756,7 @@ export async function runSessionsTui({
         dbFork={dbFork}
         initialMountDir={mountDir}
         currentRepoInfo={currentRepoInfo}
+        isGitRepo={effectiveIsGitRepo}
         onComplete={(result) => resolveResult(result)}
       />
     </CopyOnSelect>,
@@ -754,8 +792,14 @@ export async function runSessionsTui({
         await resumeSession(result.resumeContainerId, { mode: 'shell' });
       } else {
         // Fresh shell container
-        const repoInfo = await getRepoInfo();
-        await startShellContainer({ repoInfo, mountDir: result.shellMountDir });
+        const shellRepoInfo = result.shellIsGitRepo
+          ? await getRepoInfo()
+          : null;
+        await startShellContainer({
+          repoInfo: shellRepoInfo,
+          mountDir: result.shellMountDir,
+          isGitRepo: result.shellIsGitRepo,
+        });
       }
     } catch (err) {
       log.error({ err }, 'Failed to start shell');
@@ -772,19 +816,21 @@ export async function runSessionsTui({
       branchName,
       envVars,
       mountDir: startMountDir,
+      isGitRepo: startIsGitRepo = true,
     } = result.startInfo;
     try {
-      const repoInfo = await getRepoInfo();
+      const startRepoInfo = startIsGitRepo ? await getRepoInfo() : null;
       await startContainer({
         branchName,
         prompt,
-        repoInfo,
+        repoInfo: startRepoInfo,
         agent,
         model,
         detach: false,
         interactive: true,
         envVars,
         mountDir: startMountDir,
+        isGitRepo: startIsGitRepo,
       });
     } catch (err) {
       log.error({ err }, 'Failed to start session interactively');
@@ -794,7 +840,13 @@ export async function runSessionsTui({
 
   // Handle needs-agent-auth action - run interactive login and retry
   if (result.type === 'needs-agent-auth' && result.authInfo) {
-    const { agent, model, prompt, mountDir: authMountDir } = result.authInfo;
+    const {
+      agent,
+      model,
+      prompt,
+      mountDir: authMountDir,
+      isGitRepo: authIsGitRepo,
+    } = result.authInfo;
     const agentName = agent === 'claude' ? 'Claude' : 'Opencode';
 
     console.log(`\n${agentName} credentials are missing or expired.`);
@@ -821,6 +873,7 @@ export async function runSessionsTui({
       serviceId,
       dbFork,
       mountDir: authMountDir,
+      isGitRepo: authIsGitRepo,
     });
   }
 }
