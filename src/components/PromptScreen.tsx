@@ -38,6 +38,8 @@ export interface PromptScreenProps {
   resumeSession?: HermesSession; // If set, we're resuming this session
   /** Initial mount directory from CLI flag (enables mount mode if set) */
   initialMountDir?: string | null;
+  /** If true, not running from a git repo - forces mount mode */
+  isNonGitRepo?: boolean;
   onSubmit: (result: {
     prompt: string;
     agent: AgentType;
@@ -90,6 +92,7 @@ export function PromptScreen({
   defaultModel = null,
   resumeSession,
   initialMountDir,
+  isNonGitRepo = false,
   onSubmit,
   onShell,
   onViewSessions,
@@ -109,10 +112,13 @@ export function PromptScreen({
   const [slashQuery, setSlashQuery] = useState('');
   const [toast, setToast] = useState<ToastState | null>(null);
   const [submitMode, setSubmitMode] = useState<SubmitMode>('async');
-  // Mount mode state - enabled when initialMountDir is set or toggled via Ctrl+M
-  const [mountMode, setMountMode] = useState<boolean>(!!initialMountDir);
+  // Mount mode state - enabled when initialMountDir is set, non-git repo, or toggled via Ctrl+D
+  // When in non-git repo, mount mode is forced and cannot be toggled off
+  const [mountMode, setMountMode] = useState<boolean>(
+    !!initialMountDir || isNonGitRepo,
+  );
   const [mountDir, setMountDir] = useState<string | null>(
-    initialMountDir ?? null,
+    initialMountDir ?? (isNonGitRepo ? process.cwd() : null),
   );
   const modelsMap = useAgentModels();
   const currentModels = modelsMap[agent];
@@ -196,14 +202,20 @@ export function PromptScreen({
       },
       {
         name: 'mount',
-        description: mountMode
-          ? 'Disable mount mode (use git clone)'
-          : 'Enable mount mode (use local directory)',
+        description: isNonGitRepo
+          ? 'Mount mode required (no git repo)'
+          : mountMode
+            ? 'Disable mount mode (use git clone)'
+            : 'Enable mount mode (use local directory)',
         onSelect: () => {
           setShowSlashCommands(false);
           setSlashQuery('');
           if (textareaRef.current) {
             textareaRef.current.clear();
+          }
+          // Don't allow toggling mount mode off when not in a git repo
+          if (isNonGitRepo) {
+            return;
           }
           setMountMode((m) => {
             if (!m) {
@@ -215,7 +227,14 @@ export function PromptScreen({
         },
       },
     ],
-    [resumeSession, currentModels, onViewSessions, switchAgent, mountMode],
+    [
+      resumeSession,
+      currentModels,
+      onViewSessions,
+      switchAgent,
+      mountMode,
+      isNonGitRepo,
+    ],
   );
 
   // Handle model selection from modal
@@ -371,6 +390,10 @@ export function PromptScreen({
     }
 
     if (key.name === 'd' && key.ctrl) {
+      // Don't allow toggling mount mode off when not in a git repo
+      if (isNonGitRepo) {
+        return;
+      }
       setMountMode((m) => {
         if (!m) {
           // Enabling mount mode - set default mount dir to cwd
@@ -466,7 +489,11 @@ export function PromptScreen({
                 {submitMode === 'interactive' ? (
                   <text fg={theme.success}>[interactive]</text>
                 ) : null}
-                {mountMode ? <text fg={theme.warning}>[mount]</text> : null}
+                {isNonGitRepo ? (
+                  <text fg={theme.warning}>[mount: no git repo]</text>
+                ) : mountMode ? (
+                  <text fg={theme.warning}>[mount]</text>
+                ) : null}
                 <text fg={model?.name ? theme.text : theme.textMuted}>
                   {model?.name || modelId || 'Loading...'}
                 </text>
