@@ -480,7 +480,7 @@ export async function ensureDockerImage(
 export interface StartContainerOptions {
   branchName: string;
   prompt: string;
-  repoInfo: RepoInfo;
+  repoInfo: RepoInfo | null;
   agent: AgentType;
   model?: string;
   detach: boolean;
@@ -488,6 +488,8 @@ export interface StartContainerOptions {
   envVars?: Record<string, string>;
   /** If set, mount this local directory into the container instead of git clone */
   mountDir?: string;
+  /** Whether running from a git repository (affects git/gh operations and PR instructions) */
+  isGitRepo?: boolean;
 }
 
 // ============================================================================
@@ -1048,6 +1050,7 @@ export async function startContainer(
     interactive,
     envVars,
     mountDir,
+    isGitRepo = true,
   } = options;
 
   // Get the resolved sandbox image
@@ -1103,16 +1106,21 @@ export async function startContainer(
       ? `claude${interactive ? '' : ' -p'}${modelArg} --dangerously-skip-permissions`
       : `opencode${modelArg} ${interactive ? '--prompt' : 'run'}`;
 
-  const fullPrompt = interactive
-    ? prompt
-    : `${prompt}
+  // Only add PR instructions if in a git repo and not interactive mode
+  const fullPrompt =
+    interactive || !isGitRepo
+      ? prompt
+      : `${prompt}
 
 ---
 Unless otherwise instructed above, use the \`gh\` command to create a PR when done.`;
 
-  // Different startup script for mount mode vs clone mode
-  const startupScript = absoluteMountDir
-    ? `
+  // Different startup script based on mount mode and git repo status
+  let startupScript: string;
+  if (absoluteMountDir) {
+    if (isGitRepo) {
+      // Mount mode in a git repo - may create branch
+      startupScript = `
 set -e
 cd /work/app
 gh auth setup-git
@@ -1122,8 +1130,21 @@ if [ "$current_branch" = "main" ] || [ "$current_branch" = "master" ]; then
   git switch -c "hermes/${branchName}"
 fi
 ${escapePrompt(agentCommand, fullPrompt)}
-`.trim()
-    : `
+`.trim();
+    } else {
+      // Mount mode outside a git repo - skip all git/gh operations
+      startupScript = `
+set -e
+cd /work/app
+${escapePrompt(agentCommand, fullPrompt)}
+`.trim();
+    }
+  } else {
+    // Clone mode - requires git repo
+    if (!repoInfo) {
+      throw new Error('Cannot use clone mode without a git repository');
+    }
+    startupScript = `
 set -e
 cd /work
 gh auth setup-git
@@ -1132,6 +1153,7 @@ cd app
 git switch -c "hermes/${branchName}"
 ${escapePrompt(agentCommand, fullPrompt)}
 `.trim();
+  }
 
   // Build label arguments for hermes metadata
   const labelArgs: string[] = [
@@ -1144,7 +1166,7 @@ ${escapePrompt(agentCommand, fullPrompt)}
     '--label',
     `hermes.agent=${agent}`,
     '--label',
-    `hermes.repo=${repoInfo.fullName}`,
+    `hermes.repo=${repoInfo?.fullName ?? 'local'}`,
     '--label',
     `hermes.created=${new Date().toISOString()}`,
     '--label',
@@ -1156,6 +1178,10 @@ ${escapePrompt(agentCommand, fullPrompt)}
   // Track mount mode in labels
   if (absoluteMountDir) {
     labelArgs.push('--label', `hermes.mount=${absoluteMountDir}`);
+  }
+  // Track whether this is a git repo
+  if (!isGitRepo) {
+    labelArgs.push('--label', 'hermes.no-git=true');
   }
   // Store the full prompt in label (truncation is done only at display time)
   labelArgs.push('--label', `hermes.prompt=${prompt}`);
@@ -1219,9 +1245,11 @@ ${escapePrompt(agentCommand, fullPrompt)}
 }
 
 export interface StartShellContainerOptions {
-  repoInfo: RepoInfo;
+  repoInfo: RepoInfo | null;
   /** If set, mount this local directory instead of git clone */
   mountDir?: string;
+  /** Whether running from a git repository (affects git/gh operations) */
+  isGitRepo?: boolean;
 }
 
 /**
@@ -1231,7 +1259,7 @@ export interface StartShellContainerOptions {
 export async function startShellContainer(
   options: StartShellContainerOptions,
 ): Promise<void> {
-  const { repoInfo, mountDir } = options;
+  const { repoInfo, mountDir, isGitRepo = true } = options;
 
   const hermesEnvPath = '.hermes/.env';
   const hermesEnvFile = Bun.file(hermesEnvPath);
@@ -1265,15 +1293,31 @@ export async function startShellContainer(
 
   const volumeArgs = toVolumeArgs(volumes);
 
-  // Shell startup script: different for mount vs clone mode
-  const startupScript = absoluteMountDir
-    ? `
+  // Shell startup script: different based on mount mode and git repo status
+  let startupScript: string;
+  if (absoluteMountDir) {
+    if (isGitRepo) {
+      // Mount mode in a git repo
+      startupScript = `
 set -e
 cd /work/app
 gh auth setup-git
 exec bash
-`.trim()
-    : `
+`.trim();
+    } else {
+      // Mount mode outside a git repo - skip git/gh operations
+      startupScript = `
+set -e
+cd /work/app
+exec bash
+`.trim();
+    }
+  } else {
+    // Clone mode - requires git repo
+    if (!repoInfo) {
+      throw new Error('Cannot use clone mode without a git repository');
+    }
+    startupScript = `
 set -e
 cd /work
 gh auth setup-git
@@ -1281,6 +1325,7 @@ gh repo clone ${repoInfo.fullName} app
 cd app
 exec bash
 `.trim();
+  }
 
   // Build label arguments for hermes metadata
   const labelArgs: string[] = [
@@ -1293,7 +1338,7 @@ exec bash
     '--label',
     'hermes.agent=shell',
     '--label',
-    `hermes.repo=${repoInfo.fullName}`,
+    `hermes.repo=${repoInfo?.fullName ?? 'local'}`,
     '--label',
     `hermes.created=${new Date().toISOString()}`,
     '--label',
@@ -1304,6 +1349,10 @@ exec bash
   // Track mount mode in labels
   if (absoluteMountDir) {
     labelArgs.push('--label', `hermes.mount=${absoluteMountDir}`);
+  }
+  // Track whether this is a git repo
+  if (!isGitRepo) {
+    labelArgs.push('--label', 'hermes.no-git=true');
   }
 
   await runInDocker({

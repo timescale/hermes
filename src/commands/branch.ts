@@ -10,8 +10,8 @@ import { type ForkResult, forkDatabase } from '../services/db';
 import { ensureDockerSandbox, startContainer } from '../services/docker';
 import {
   generateBranchName,
-  getRepoInfo,
   type RepoInfo,
+  tryGetRepoInfo,
 } from '../services/git';
 import { ensureOpencodeAuth } from '../services/opencode';
 import { ensureGitignore } from '../utils';
@@ -30,17 +30,16 @@ interface BranchOptions {
 
 function printSummary(
   branchName: string,
-  repoInfo: RepoInfo,
+  repoInfo: RepoInfo | null,
   forkResult: ForkResult | null,
 ): void {
   console.log(`
-Repository: ${repoInfo.fullName}
-Branch: hermes/${branchName}${
-    forkResult
-      ? `
+${repoInfo ? `Repository: ${repoInfo.fullName}\nBranch: hermes/${branchName}` : 'Mode: Local directory (no git repo)'}${
+  forkResult
+    ? `
 Database: ${forkResult.name} (service ID: ${forkResult.service_id})`
-      : ''
-  }
+    : ''
+}
 Container: hermes-${branchName}
 
 To view agent logs:
@@ -62,12 +61,31 @@ export async function branchAction(
   }
 
   await ensureDockerSandbox();
-  await ensureGhAuth();
 
-  // Step 1: Ensure .gitignore has .hermes/ entry
-  await ensureGitignore();
+  // Step 1: Check if we're in a git repository
+  const repoInfo = await tryGetRepoInfo();
+  const isGitRepo = repoInfo !== null;
 
-  // Step 2: Read merged config for defaults, run config wizard if no project config exists
+  // Force mount mode if not in a git repo
+  const forcedMount = !isGitRepo && !options.mount;
+  if (forcedMount) {
+    console.log(
+      'Not in a git repository. Using mount mode with current directory.',
+    );
+    options.mount = true;
+  }
+
+  // Only require GitHub auth if in a git repo
+  if (isGitRepo) {
+    await ensureGhAuth();
+  }
+
+  // Step 2: Ensure .gitignore has .hermes/ entry (only if in a git repo)
+  if (isGitRepo) {
+    await ensureGitignore();
+  }
+
+  // Step 3: Read merged config for defaults, run config wizard if no project config exists
   if (!(await projectConfig.exists())) {
     console.log('No project config found. Running config wizard...\n');
     await configAction();
@@ -82,17 +100,18 @@ export async function branchAction(
   // Read merged config for effective values
   const config = await readConfig();
 
-  // Step 3: Determine effective values from options or config
+  // Step 4: Determine effective values from options or config
   const effectiveServiceId = options.serviceId ?? config.tigerServiceId;
   const effectiveAgent: AgentType = options.agent ?? config.agent ?? 'opencode';
   const effectiveModel: string | undefined = options.model ?? config.model;
 
-  // Step 4: Get repo info
-  console.log('Getting repository info...');
-  const repoInfo = await getRepoInfo();
-  console.log(`  Repository: ${repoInfo.fullName}`);
+  // Step 5: Get repo info (if in a git repo)
+  if (isGitRepo) {
+    console.log('Getting repository info...');
+    console.log(`  Repository: ${repoInfo.fullName}`);
+  }
 
-  // Step 5: Generate branch name using configured agent and model
+  // Step 6: Generate branch name using configured agent and model
   console.log('Generating branch name...');
   const branchName = await generateBranchName({
     prompt,
@@ -102,7 +121,7 @@ export async function branchAction(
   });
   console.log(`  Branch name: ${branchName}`);
 
-  // Step 6: Fork database (only if explicitly configured with a service ID)
+  // Step 7: Fork database (only if explicitly configured with a service ID)
   let forkResult: ForkResult | null = null;
   if (!options.dbFork) {
     console.log('Skipping database fork (--no-db-fork)');
@@ -115,7 +134,7 @@ export async function branchAction(
     console.log(`  Database fork created: ${forkResult.name}`);
   }
 
-  // Step 7: Ensure agent credentials are valid
+  // Step 8: Ensure agent credentials are valid
   console.log(`Checking ${effectiveAgent} credentials...`);
   const authValid =
     effectiveAgent === 'claude'
@@ -129,7 +148,7 @@ export async function branchAction(
     process.exit(1);
   }
 
-  // Step 8: Start container (repo will be cloned or mounted)
+  // Step 9: Start container (repo will be cloned or mounted)
   // Resolve mount directory: true means cwd, string means specific path
   const mountDir =
     options.mount === true
@@ -154,6 +173,7 @@ export async function branchAction(
     interactive: options.interactive,
     envVars: forkResult?.envVars,
     mountDir,
+    isGitRepo,
   });
 
   if (detach) {
@@ -208,6 +228,18 @@ export const branchCommand = withBranchOptions(
     return;
   }
 
+  // Check if we're in a git repository before launching TUI
+  const repoInfo = await tryGetRepoInfo();
+  const isGitRepo = repoInfo !== null;
+
+  // Force mount mode if not in a git repo
+  if (!isGitRepo && !options.mount) {
+    console.log(
+      'Not in a git repository. Using mount mode with current directory.',
+    );
+    options.mount = true;
+  }
+
   // Default: use unified TUI
   // Resolve mount directory: true means cwd, string means specific path
   const mountDir =
@@ -226,5 +258,6 @@ export const branchCommand = withBranchOptions(
     serviceId: options.serviceId,
     dbFork: options.dbFork,
     mountDir,
+    isGitRepo,
   });
 });

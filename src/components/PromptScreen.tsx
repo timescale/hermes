@@ -38,6 +38,8 @@ export interface PromptScreenProps {
   resumeSession?: HermesSession; // If set, we're resuming this session
   /** Initial mount directory from CLI flag (enables mount mode if set) */
   initialMountDir?: string | null;
+  /** If true, mount mode is forced (no GitHub remote available) */
+  forceMountMode?: boolean;
   onSubmit: (result: {
     prompt: string;
     agent: AgentType;
@@ -90,6 +92,7 @@ export function PromptScreen({
   defaultModel = null,
   resumeSession,
   initialMountDir,
+  forceMountMode = false,
   onSubmit,
   onShell,
   onViewSessions,
@@ -109,10 +112,13 @@ export function PromptScreen({
   const [slashQuery, setSlashQuery] = useState('');
   const [toast, setToast] = useState<ToastState | null>(null);
   const [submitMode, setSubmitMode] = useState<SubmitMode>('async');
-  // Mount mode state - enabled when initialMountDir is set or toggled via Ctrl+M
-  const [mountMode, setMountMode] = useState<boolean>(!!initialMountDir);
+  // Mount mode state - enabled when initialMountDir is set, forced, or toggled via Ctrl+D
+  // When forceMountMode is true, mount mode cannot be toggled off
+  const [mountMode, setMountMode] = useState<boolean>(
+    !!initialMountDir || forceMountMode,
+  );
   const [mountDir, setMountDir] = useState<string | null>(
-    initialMountDir ?? null,
+    initialMountDir ?? (forceMountMode ? process.cwd() : null),
   );
   const modelsMap = useAgentModels();
   const currentModels = modelsMap[agent];
@@ -196,14 +202,20 @@ export function PromptScreen({
       },
       {
         name: 'mount',
-        description: mountMode
-          ? 'Disable mount mode (use git clone)'
-          : 'Enable mount mode (use local directory)',
+        description: forceMountMode
+          ? 'Mount mode required'
+          : mountMode
+            ? 'Disable mount mode (use git clone)'
+            : 'Enable mount mode (use local directory)',
         onSelect: () => {
           setShowSlashCommands(false);
           setSlashQuery('');
           if (textareaRef.current) {
             textareaRef.current.clear();
+          }
+          // Don't allow toggling mount mode off when forced
+          if (forceMountMode) {
+            return;
           }
           setMountMode((m) => {
             if (!m) {
@@ -215,7 +227,14 @@ export function PromptScreen({
         },
       },
     ],
-    [resumeSession, currentModels, onViewSessions, switchAgent, mountMode],
+    [
+      resumeSession,
+      currentModels,
+      onViewSessions,
+      switchAgent,
+      mountMode,
+      forceMountMode,
+    ],
   );
 
   // Handle model selection from modal
@@ -371,6 +390,10 @@ export function PromptScreen({
     }
 
     if (key.name === 'd' && key.ctrl) {
+      // Don't allow toggling mount mode off when forced
+      if (forceMountMode) {
+        return;
+      }
       setMountMode((m) => {
         if (!m) {
           // Enabling mount mode - set default mount dir to cwd
