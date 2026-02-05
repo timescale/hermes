@@ -19,6 +19,17 @@ import { resumeCommand } from './commands/resume';
 import { runSessionsTui, sessionsCommand } from './commands/sessions';
 import { shellCommand } from './commands/shell';
 import { log } from './services/logger';
+import { flush, trackCommand, trackError } from './services/telemetry';
+
+// Patch process.exit to flush telemetry first
+const originalExit = process.exit;
+process.exit = ((code?: number) => {
+  flush().finally(() => {
+    originalExit(code);
+  });
+  // Keep the process alive briefly while flushing
+  setTimeout(() => originalExit(code), 5000);
+}) as typeof process.exit;
 
 program
   .name('hermes')
@@ -72,5 +83,29 @@ program.addCommand(opencodeCommand);
 program.addCommand(resumeCommand);
 program.addCommand(sessionsCommand);
 program.addCommand(shellCommand);
+
+// Track all command invocations
+program.hook('preAction', (thisCommand) => {
+  trackCommand(thisCommand.name());
+});
+
+// Flush telemetry after each command completes
+program.hook('postAction', async () => {
+  await flush();
+});
+
+// Track uncaught errors
+process.on('uncaughtException', async (err) => {
+  trackError(err.name, program.args[0]);
+  await flush();
+  throw err;
+});
+
+process.on('unhandledRejection', async (reason) => {
+  const errorName =
+    reason instanceof Error ? reason.name : 'UnhandledRejection';
+  trackError(errorName, program.args[0]);
+  await flush();
+});
 
 program.parse();

@@ -48,6 +48,15 @@ export interface HermesConfig {
    * When set, takes precedence over sandboxBaseImage.
    */
   buildSandboxFromDockerfile?: boolean | 'slim' | 'full' | string;
+
+  /**
+   * Telemetry preference.
+   * - true/undefined (default): Send anonymous telemetry
+   * - false: Disable telemetry
+   *
+   * Can also be disabled via HERMES_TELEMETRY=0 or DO_NOT_TRACK=1 env vars.
+   */
+  telemetry?: boolean;
 }
 
 // ============================================================================
