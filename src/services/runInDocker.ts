@@ -21,6 +21,26 @@ export interface RunInDockerResult {
   text: () => string;
 }
 
+export const API_KEYS_TO_PASSTHROUGH = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'];
+
+export const getHostEnvArgs = (): string[] => {
+  const args: string[] = [];
+  for (const key of API_KEYS_TO_PASSTHROUGH) {
+    const value = process.env[key];
+    if (value) {
+      args.push('-e', `${key}=${value}`);
+    }
+  }
+  return args;
+};
+
+const redactEnvArgs = (args: readonly string[]): string[] =>
+  args.map((arg) =>
+    API_KEYS_TO_PASSTHROUGH.some((key) => arg.startsWith(`${key}=`))
+      ? `${arg.split('=')[0]}=[REDACTED]`
+      : arg,
+  );
+
 export const runInDocker = async ({
   dockerArgs = ['--rm'],
   cmdArgs = [],
@@ -29,17 +49,22 @@ export const runInDocker = async ({
   interactive = false,
   shouldThrow = true,
 }: RunInDockerOptions): Promise<RunInDockerResult> => {
+  // Pass through API keys from host environment so credential checks
+  // and agent runs inside Docker can use them without re-authentication
+  const hostEnvArgs = getHostEnvArgs();
+  const allDockerArgs = [...hostEnvArgs, ...dockerArgs];
+
   // Resolve the sandbox image if not explicitly provided
   const resolvedImage = dockerImage ?? (await resolveSandboxImage()).image;
   log.debug(
     {
-      dockerArgs,
+      dockerArgs: redactEnvArgs(allDockerArgs),
       cmdArgs,
       cmdName,
       dockerImage: resolvedImage,
       interactive,
       shouldThrow,
-      cmd: `docker run${interactive ? ' -it' : ''} ${printArgs(dockerArgs)} ${resolvedImage} ${cmdName} ${printArgs(cmdArgs)}`,
+      cmd: `docker run${interactive ? ' -it' : ''} ${printArgs(redactEnvArgs(allDockerArgs))} ${resolvedImage} ${cmdName} ${printArgs(cmdArgs)}`,
     },
     'runInDocker',
   );
@@ -49,7 +74,7 @@ export const runInDocker = async ({
         'docker',
         'run',
         '-it',
-        ...dockerArgs,
+        ...allDockerArgs,
         resolvedImage,
         cmdName,
         ...cmdArgs,
@@ -73,7 +98,7 @@ export const runInDocker = async ({
   }
 
   const proc =
-    await $`docker run ${dockerArgs} ${resolvedImage} ${cmdName} ${cmdArgs}`
+    await $`docker run ${allDockerArgs} ${resolvedImage} ${cmdName} ${cmdArgs}`
       .quiet()
       .throws(shouldThrow);
   return {
