@@ -1,12 +1,15 @@
 import { $, spawn } from 'bun';
+import { nanoid } from 'nanoid';
 import { printArgs, resolveSandboxImage } from './docker';
 import { log } from './logger';
 
 export interface RunInDockerOptionsBase {
+  containerName?: string;
   dockerArgs?: readonly string[];
   cmdArgs?: readonly string[];
   dockerImage?: string;
   interactive?: boolean;
+  detached?: boolean;
   shouldThrow?: boolean;
 }
 
@@ -22,24 +25,34 @@ export interface RunInDockerResult {
 }
 
 export const runInDocker = async ({
+  containerName = `hermes-anon-${nanoid(12)}`,
   dockerArgs = ['--rm'],
-  cmdArgs = [],
   cmdName,
+  cmdArgs = [],
   dockerImage,
   interactive = false,
+  detached = false,
   shouldThrow = true,
 }: RunInDockerOptions): Promise<RunInDockerResult> => {
   // Resolve the sandbox image if not explicitly provided
   const resolvedImage = dockerImage ?? (await resolveSandboxImage()).image;
+  const effectiveDockerArgs = [
+    '--name',
+    containerName,
+    ...(detached ? ['-d'] : []),
+    ...dockerArgs,
+  ];
   log.debug(
     {
+      containerName,
       dockerArgs,
       cmdArgs,
       cmdName,
       dockerImage: resolvedImage,
       interactive,
+      detached,
       shouldThrow,
-      cmd: `docker run${interactive ? ' -it' : ''} ${printArgs(dockerArgs)} ${resolvedImage} ${cmdName} ${printArgs(cmdArgs)}`,
+      cmd: `docker run${interactive ? ' -it' : ''} ${printArgs(effectiveDockerArgs)} ${resolvedImage} ${cmdName} ${printArgs(cmdArgs)}`,
     },
     'runInDocker',
   );
@@ -49,7 +62,7 @@ export const runInDocker = async ({
         'docker',
         'run',
         '-it',
-        ...dockerArgs,
+        ...effectiveDockerArgs,
         resolvedImage,
         cmdName,
         ...cmdArgs,
@@ -73,7 +86,7 @@ export const runInDocker = async ({
   }
 
   const proc =
-    await $`docker run ${dockerArgs} ${resolvedImage} ${cmdName} ${cmdArgs}`
+    await $`docker run ${effectiveDockerArgs} ${resolvedImage} ${cmdName} ${cmdArgs}`
       .quiet()
       .throws(shouldThrow);
   return {

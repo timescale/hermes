@@ -1004,37 +1004,16 @@ ${escapePrompt(buildResumeAgentCommand(agent, mode, model), prompt)}
   }
 
   try {
-    if (mode === 'detached') {
-      const result = await $`docker run -d \
-        --name ${containerName} \
-        ${labelArgs} \
-        ${envArgs} \
-        ${volumeArgs} \
-        ${resumeImage} \
-        bash -c ${resumeScript}`.quiet();
-      return result.stdout.toString().trim();
-    }
-
-    const proc = Bun.spawn(
-      [
-        'docker',
-        'run',
-        '-it',
-        '--name',
-        containerName,
-        ...labelArgs,
-        ...envArgs,
-        ...volumeArgs,
-        resumeImage,
-        'bash',
-        '-c',
-        resumeScript,
-      ],
-      {
-        stdio: ['inherit', 'inherit', 'inherit'],
-      },
-    );
-    await proc.exited;
+    const result = await runInDocker({
+      containerName,
+      dockerArgs: [...labelArgs, ...envArgs, ...volumeArgs],
+      cmdName: 'bash',
+      cmdArgs: ['-c', resumeScript],
+      dockerImage: resumeImage,
+      interactive: mode !== 'detached',
+      detached: mode === 'detached',
+    });
+    await result.exited;
     return containerName;
   } catch (error) {
     log.error({ error }, 'Error resuming container');
@@ -1129,10 +1108,6 @@ export async function startContainer(
     mountDir,
     isGitRepo = true,
   } = options;
-
-  // Get the resolved sandbox image
-  const imageConfig = await resolveSandboxImage();
-  const dockerImage = imageConfig.image;
 
   const hermesEnvPath = '.hermes/.env';
   const hermesEnvFile = Bun.file(hermesEnvPath);
@@ -1278,57 +1253,23 @@ ${escapePrompt(agentCommand, fullPrompt)}
   labelArgs.push('--label', `hermes.prompt=${prompt}`);
 
   try {
-    if (detach) {
-      log.debug(
-        {
-          cmd: `docker run -d \
-        --name ${containerName} \
-        ${printArgs(labelArgs)} \
-        ${printArgs(hostEnvArgs)} \
-        --env-file ${hermesEnvPath} \
-        ${printArgs(envArgs)} \
-        ${printArgs(volumeArgs)} \
-        ${dockerImage} \
-        bash -c ${$.escape(startupScript)}`,
-        },
-        'Starting docker container in detached mode',
-      );
-      const result = await $`docker run -d \
-        --name ${containerName} \
-        ${labelArgs} \
-        ${hostEnvArgs} \
-        --env-file ${hermesEnvPath} \
-        ${envArgs} \
-        ${volumeArgs} \
-        ${dockerImage} \
-        bash -c ${startupScript}`.quiet();
-      return result.stdout.toString().trim();
-    }
-
-    // Interactive/foreground mode - use Bun.spawn with inherited stdio for proper TTY
-    const spawnArgs = [
-      'docker',
-      'run',
-      '-it',
-      '--name',
+    const result = await runInDocker({
       containerName,
-      ...labelArgs,
-      ...hostEnvArgs,
-      '--env-file',
-      hermesEnvPath,
-      ...envArgs,
-      ...volumeArgs,
-      dockerImage,
-      'bash',
-      '-c',
-      startupScript,
-    ];
-    log.debug({ spawnArgs }, 'Starting docker container');
-    const proc = Bun.spawn(spawnArgs, {
-      stdio: ['inherit', 'inherit', 'inherit'],
+      dockerArgs: [
+        ...labelArgs,
+        ...hostEnvArgs,
+        '--env-file',
+        hermesEnvPath,
+        ...envArgs,
+        ...volumeArgs,
+      ],
+      cmdName: 'bash',
+      cmdArgs: ['-c', startupScript],
+      interactive: !detach,
+      detached: detach,
     });
-    await proc.exited;
-    return null;
+    await result.exited;
+    return detach ? result.text().trim() : null;
   } catch (error) {
     log.error({ error }, 'Error starting container');
     throw formatShellError(error as ShellError);
@@ -1459,10 +1400,9 @@ exec bash
   }
 
   await runInDocker({
+    containerName,
     interactive: true,
     dockerArgs: [
-      '--name',
-      containerName,
       ...labelArgs,
       ...hostEnvArgs,
       '--env-file',
