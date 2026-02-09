@@ -1,5 +1,6 @@
+import { $, spawn } from 'bun';
 import { extract } from 'tar-stream';
-import { spawn, $ } from 'bun';
+import { log } from './logger';
 
 export const CONTAINER_HOME = '/home/hermes';
 
@@ -7,22 +8,46 @@ export async function writeFileToContainer(
   containerId: string,
   containerPath: string,
   content: string,
-) {
+): Promise<void> {
+  const escaped = $.escape(containerPath);
   const proc = spawn(
-    ['docker', 'exec', '-i', containerId, 'sh', '-c', `cat > ${$.escape(containerPath)}`],
-    { stdin: new Blob([content]), stderr: 'ignore', stdout: 'ignore' },
+    [
+      'docker',
+      'exec',
+      '-i',
+      containerId,
+      'sh',
+      '-c',
+      `mkdir -p $(dirname ${escaped}) && cat > ${escaped}`,
+    ],
+    { stdin: new Blob([content]), stderr: 'pipe', stdout: 'pipe' },
   );
-  await proc.exited;
+  const code = await proc.exited;
+  if (code) {
+    log.error(
+      {
+        code,
+        containerId,
+        containerPath,
+        stdout: await proc.stdout.text(),
+        stderr: await proc.stderr.text(),
+      },
+      'Failed to write file to container',
+    );
+    throw new Error(`Failed to write file to container: ${code}`);
+  } else {
+    log.trace({ containerId, containerPath }, 'writeFileToContainer');
+  }
 }
 
 export async function readFileFromContainer(
   containerId: string,
   containerPath: string,
 ): Promise<string> {
-  const proc = spawn(
-    ['docker', 'cp', `${containerId}:${containerPath}`, '-'],
-    { stdout: 'pipe', stderr: 'ignore' },
-  );
+  const proc = spawn(['docker', 'cp', `${containerId}:${containerPath}`, '-'], {
+    stdout: 'pipe',
+    stderr: 'ignore',
+  });
 
   const ex = extract();
 
