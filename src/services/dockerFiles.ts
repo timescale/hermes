@@ -1,4 +1,5 @@
 import { extract } from 'tar-stream';
+import { spawn, $ } from 'bun';
 
 export const CONTAINER_HOME = '/home/hermes';
 
@@ -7,8 +8,8 @@ export async function writeFileToContainer(
   containerPath: string,
   content: string,
 ) {
-  const proc = Bun.spawn(
-    ['docker', 'exec', '-i', containerId, 'sh', '-c', `cat > ${containerPath}`],
+  const proc = spawn(
+    ['docker', 'exec', '-i', containerId, 'sh', '-c', `cat > ${$.escape(containerPath)}`],
     { stdin: new Blob([content]), stderr: 'ignore', stdout: 'ignore' },
   );
   await proc.exited;
@@ -18,7 +19,7 @@ export async function readFileFromContainer(
   containerId: string,
   containerPath: string,
 ): Promise<string> {
-  const proc = Bun.spawn(
+  const proc = spawn(
     ['docker', 'cp', `${containerId}:${containerPath}`, '-'],
     { stdout: 'pipe', stderr: 'ignore' },
   );
