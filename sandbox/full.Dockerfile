@@ -156,6 +156,16 @@ RUN curl -fsSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | tee /etc/apt/tru
   && apt-get install -y ngrok \
   && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /.hermes/signal && chmod 777 /.hermes/signal \
+  && cat <<'ENTRY' > /.hermes/signalEntrypoint.sh && chmod +x /.hermes/signalEntrypoint.sh
+#!/bin/sh
+# wait for ready signal, then start
+while [ ! -f /.hermes/signal/.ready ]; do
+  sleep 0.1
+done
+exec "$@"
+ENTRY
+
 # ============================================================================
 # NON-ROOT USER SETUP
 # ============================================================================

@@ -1,6 +1,5 @@
 // Pass-through to the claude CLI, running in docker
 
-import { resolve } from 'node:path';
 import { Command } from 'commander';
 import { runClaudeInDocker } from '../services/claude';
 import { ensureDockerSandbox } from '../services/docker';
@@ -23,24 +22,12 @@ export const claudeCommand = new Command('claude')
     try {
       await ensureDockerSandbox();
 
-      // Build docker args with optional mount
-      const dockerArgs: string[] = ['--rm'];
-      if (options.mount) {
-        const mountDir = options.mount === true ? process.cwd() : options.mount;
-        const absoluteMountDir = resolve(mountDir);
-        dockerArgs.push(
-          '-v',
-          `${absoluteMountDir}:/work/app`,
-          '-w',
-          '/work/app',
-        );
-      }
-
       const proc = await runClaudeInDocker({
-        dockerArgs,
+        mountCwd: options.mount,
         cmdArgs: args,
         interactive: true,
       });
+      await proc.removed;
       process.exit(await proc.exited);
     } catch (err) {
       log.error({ err }, 'Error executing claude command');
