@@ -177,6 +177,7 @@ export const runClaudeInDocker = async ({
       .then(async (code) => {
         if (code) {
           log.debug(`Claude exited with code ${code}, not saving credentials`);
+          deferredCredsCaptured.resolve(false);
           return;
         }
         deferredCredsCaptured.wrap(
