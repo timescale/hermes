@@ -37,6 +37,8 @@ export async function getPrForBranch(
   repo: string,
   sessionName: string,
 ): Promise<PrInfo | null> {
+  if (repo === 'local') return null;
+
   // Session branch names don't include the 'hermes/' prefix, but the actual
   // git branches are created with it (e.g., 'hermes/feature-xyz')
   const branch = sessionName.startsWith('hermes/')

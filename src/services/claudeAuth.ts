@@ -3,7 +3,8 @@
 // ============================================================================
 
 import { stripVTControlCharacters } from 'node:util';
-import { getClaudeConfigVolume } from './claude';
+import { nanoid } from 'nanoid';
+import { captureClaudeCredentialsFromContainer } from './claude';
 import { resolveSandboxImage } from './docker';
 import { log } from './logger';
 
@@ -60,7 +61,6 @@ const MANUAL_LOGIN_HINT = 'Try running: hermes claude /login';
  */
 export async function startClaudeAuth(): Promise<ClaudeAuthProcess | null> {
   const sandbox = await resolveSandboxImage();
-  const configVolume = await getClaudeConfigVolume();
 
   log.debug('Starting Claude login via Bun Terminal API');
 
@@ -73,14 +73,16 @@ export async function startClaudeAuth(): Promise<ClaudeAuthProcess | null> {
   // Track timeouts so we can clear them on cancel
   const timeouts: Timer[] = [];
 
+  const containerName = `hermes-claude-auth-${nanoid()}`;
+
   const proc = Bun.spawn(
     [
       'docker',
       'run',
       '-it',
       '--rm',
-      '-v',
-      configVolume,
+      '--name',
+      containerName,
       sandbox.image,
       'claude',
       '/login',
@@ -98,7 +100,9 @@ export async function startClaudeAuth(): Promise<ClaudeAuthProcess | null> {
 
           // Check for URL (after method selected)
           if (urlResolve) {
-            const urlMatch = clean.match(/(https:\/\/claude\.ai\/oauth[^\s]+)/);
+            const urlMatch = clean.match(
+              /(https:\/\/(claude\.ai|platform\.claude\.com)\/oauth[^\s]+)/,
+            );
             const url = urlMatch?.[1];
             // Check for paste prompt (with or without spaces due to ANSI stripping)
             if (
@@ -124,8 +128,12 @@ export async function startClaudeAuth(): Promise<ClaudeAuthProcess | null> {
               cleanRecent.includes('Loggedinas')
             ) {
               log.debug('Login successful');
-              completionResolve(true);
-              completionResolve = null;
+              captureClaudeCredentialsFromContainer(containerName).then(
+                (success) => {
+                  completionResolve?.(success);
+                  completionResolve = null;
+                },
+              );
             } else if (
               cleanRecent.includes('Invalid') ||
               cleanRecent.includes('error') ||
@@ -188,7 +196,9 @@ export async function startClaudeAuth(): Promise<ClaudeAuthProcess | null> {
 
         // Check if URL is already in buffer
         const clean = stripVTControlCharacters(outputBuffer);
-        const urlMatch = clean.match(/(https:\/\/claude\.ai\/oauth[^\s]+)/);
+        const urlMatch = clean.match(
+          /(https:\/\/(claude\.ai|platform\.claude\.com)\/oauth[^\s]+)/,
+        );
         const url = urlMatch?.[1];
         if (
           url &&
@@ -237,51 +247,20 @@ export async function startClaudeAuth(): Promise<ClaudeAuthProcess | null> {
     },
 
     waitForCompletion: () => {
-      return new Promise<boolean>((resolve) => {
+      return new Promise<boolean>((resolve, reject) => {
+        if (codeSubmittedAt < 0) {
+          reject(new Error('Code not submitted'));
+          return;
+        }
         completionResolve = resolve;
 
-        // Only check output that came AFTER the code was submitted
-        if (codeSubmittedAt < 0) {
-          // Code hasn't been submitted yet, just wait
-          log.debug('waitForCompletion called before code submitted');
-        } else {
-          const recentOutput = outputBuffer.slice(codeSubmittedAt);
-          const cleanRecent = stripVTControlCharacters(recentOutput);
-
-          // Check if already completed (with or without spaces due to ANSI stripping)
-          if (
-            cleanRecent.includes('Login successful') ||
-            cleanRecent.includes('Loginsuccessful') ||
-            cleanRecent.includes('Logged in as') ||
-            cleanRecent.includes('Loggedinas')
-          ) {
-            log.debug('Already logged in');
-            completionResolve(true);
-            completionResolve = null;
-            return;
-          }
-          if (
-            cleanRecent.includes('Invalid') ||
-            cleanRecent.includes('error') ||
-            cleanRecent.includes('failed')
-          ) {
-            log.debug({ cleanRecent }, 'Already failed');
-            completionResolve(false);
-            completionResolve = null;
-            return;
-          }
-        }
-
-        // Set timeout
-        const COMPLETION_TIMEOUT_MS = 60000;
+        // Wait up to 30 seconds
         timeouts.push(
           setTimeout(() => {
-            if (completionResolve) {
-              log.debug('Completion timeout');
-              completionResolve(false);
-              completionResolve = null;
-            }
-          }, COMPLETION_TIMEOUT_MS),
+            if (!completionResolve) return;
+            completionResolve(false);
+            completionResolve = null;
+          }, 30000),
         );
       });
     },

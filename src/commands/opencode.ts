@@ -1,6 +1,5 @@
 // Pass-through to the opencode CLI, running in docker
 
-import { resolve } from 'node:path';
 import { Command } from 'commander';
 import { ensureDockerSandbox } from '../services/docker';
 import { log } from '../services/logger';
@@ -23,23 +22,10 @@ export const opencodeCommand = new Command('opencode')
     try {
       await ensureDockerSandbox();
 
-      // Build docker args with optional mount
-      const dockerArgs: string[] = ['--rm'];
-      if (options.mount) {
-        const mountDir = options.mount === true ? process.cwd() : options.mount;
-        const absoluteMountDir = resolve(mountDir);
-        dockerArgs.push(
-          '-v',
-          `${absoluteMountDir}:/work/app`,
-          '-w',
-          '/work/app',
-        );
-      }
-
       const proc = await runOpencodeInDocker({
-        dockerArgs,
         cmdArgs: args,
         interactive: true,
+        mountCwd: options.mount,
       });
       process.exit(await proc.exited);
     } catch (err) {

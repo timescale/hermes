@@ -22,6 +22,16 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
   && apt-get install -y gh \
   && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p /.hermes/signal && chmod 777 /.hermes/signal \
+  && cat <<'ENTRY' > /.hermes/signalEntrypoint.sh && chmod +x /.hermes/signalEntrypoint.sh
+#!/bin/sh
+# wait for ready signal, then start
+while [ ! -f /.hermes/signal/.ready ]; do
+  sleep 0.1
+done
+exec "$@"
+ENTRY
+
 # ============================================================================
 # NON-ROOT USER SETUP
 # ============================================================================

@@ -17,7 +17,7 @@ import SLIM_DOCKERFILE from '../../sandbox/slim.Dockerfile' with {
 };
 import { runDockerSetupScreen } from '../components/DockerSetup';
 import { formatShellError, type ShellError } from '../utils';
-import { getClaudeConfigVolume } from './claude';
+import { getClaudeConfigFiles } from './claude';
 import {
   type AgentType,
   type HermesConfig,
@@ -28,7 +28,7 @@ import { getGhConfigVolume } from './gh';
 import type { RepoInfo } from './git';
 import { log } from './logger';
 import { getOpencodeConfigVolume } from './opencode';
-import { runInDocker } from './runInDocker';
+import { runInDocker, type VirtualFile } from './runInDocker';
 
 /**
  * Escape a string for safe use in shell commands using base64 encoding.
@@ -48,11 +48,11 @@ export const toVolumeArgs = (volumes: string[]): string[] =>
  * so Docker mounts them as files, not directories.
  */
 export const getCredentialVolumes = async (): Promise<string[]> => {
-  return Promise.all([
-    getClaudeConfigVolume(),
-    getOpencodeConfigVolume(),
-    getGhConfigVolume(),
-  ]);
+  return Promise.all([getOpencodeConfigVolume(), getGhConfigVolume()]);
+};
+
+export const getCredentialFiles = async (): Promise<VirtualFile[]> => {
+  return getClaudeConfigFiles();
 };
 
 /**
@@ -284,7 +284,7 @@ async function imageExists(imageName: string): Promise<boolean> {
     const output = proc.json();
     const exists =
       proc.exitCode === 0 && imageName === `${output.Repository}:${output.Tag}`;
-    log.debug({ output, imageName, exists }, 'imageExists');
+    log.debug({ imageName, exists }, 'imageExists');
     return exists;
   } catch {
     return false;
@@ -678,14 +678,10 @@ export async function removeContainer(nameOrId: string): Promise<void> {
     resumeImage = null;
   }
 
-  await $`docker rm -f ${nameOrId}`.quiet();
+  await $`docker rm -f ${nameOrId}`.quiet().nothrow();
 
   if (resumeImage) {
-    try {
-      await $`docker rmi ${resumeImage}`.quiet();
-    } catch {
-      // Ignore image removal errors
-    }
+    await $`docker rmi ${resumeImage}`.quiet().nothrow();
   }
 
   // Clean up overlay mount directories for this container
@@ -698,7 +694,7 @@ export async function removeContainer(nameOrId: string): Promise<void> {
  * Stop a running container gracefully
  */
 export async function stopContainer(nameOrId: string): Promise<void> {
-  await $`docker stop ${nameOrId}`.quiet();
+  await $`docker stop ${nameOrId}`.quiet().nothrow();
 }
 
 /**
@@ -933,6 +929,7 @@ export async function resumeSession(
   // Mount config volumes for agent credentials and session continuity
   // If mountDir is provided, add it as a volume mount
   const volumes = await getCredentialVolumes();
+  const files = await getCredentialFiles();
 
   // Resolve mount directory to absolute path if provided
   const absoluteMountDir = options.mountDir
@@ -1012,6 +1009,7 @@ ${escapePrompt(buildResumeAgentCommand(agent, mode, model), prompt)}
       dockerImage: resumeImage,
       interactive: mode !== 'detached',
       detached: mode === 'detached',
+      files,
     });
     await result.exited;
     return containerName;
@@ -1144,6 +1142,7 @@ export async function startContainer(
 
   // Build volume arguments - config volumes plus optional mount
   const volumes = await getCredentialVolumes();
+  const files = await getCredentialFiles();
 
   // Resolve mount directory to absolute path if provided
   const absoluteMountDir = mountDir ? resolve(mountDir) : undefined;
@@ -1267,6 +1266,7 @@ ${escapePrompt(agentCommand, fullPrompt)}
       cmdArgs: ['-c', startupScript],
       interactive: !detach,
       detached: detach,
+      files,
     });
     await result.exited;
     return detach ? result.text().trim() : null;
@@ -1318,6 +1318,7 @@ export async function startShellContainer(
 
   // Build volume arguments - config volumes plus optional mount
   const volumes = await getCredentialVolumes();
+  const files = await getCredentialFiles();
 
   // Resolve mount directory to absolute path if provided
   const absoluteMountDir = mountDir ? resolve(mountDir) : undefined;
@@ -1411,5 +1412,6 @@ exec bash
     ],
     cmdName: 'bash',
     cmdArgs: ['-c', startupScript],
+    files,
   });
 }

@@ -1,7 +1,7 @@
-import { resolve } from 'node:path';
 import { Command } from 'commander';
 import {
   ensureDockerSandbox,
+  getCredentialFiles,
   getCredentialVolumes,
   toVolumeArgs,
 } from '../services/docker';
@@ -23,22 +23,15 @@ export const shellCommand = new Command('shell')
     try {
       await ensureDockerSandbox();
 
+      const files = await getCredentialFiles();
       const volumes = await getCredentialVolumes();
-      // Build docker args with optional mount
-      const dockerArgs: string[] = ['--rm'];
-      if (options.mount) {
-        const mountDir = options.mount === true ? process.cwd() : options.mount;
-        const absoluteMountDir = resolve(mountDir);
-        volumes.push(`${absoluteMountDir}:/work/app`);
-        dockerArgs.push('-w', '/work/app');
-      }
-
-      dockerArgs.push(...toVolumeArgs(volumes));
 
       const proc = await runInDocker({
         cmdName: 'bash',
-        dockerArgs,
+        dockerArgs: toVolumeArgs(volumes),
         interactive: true,
+        files,
+        mountCwd: options.mount,
       });
       process.exit(await proc.exited);
     } catch (err) {
