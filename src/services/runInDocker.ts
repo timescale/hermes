@@ -49,14 +49,15 @@ export const runInDocker = async ({
   files = [],
   mountCwd = false,
 }: RunInDockerOptions): Promise<RunInDockerResult> => {
-  // Resolve the sandbox image if not explicitly provided
   const resolvedImage = dockerImage ?? (await resolveSandboxImage()).image;
   const effectiveDockerArgs = [
+    // Always start detached, so we can get the containerId and potentially write files before starting the main process
     '-d',
     '--entrypoint',
     '/.hermes/signalEntrypoint.sh',
     '--name',
     containerName,
+    // We need -it even when detached for interactive mode to work properly in the subsequent docker attach
     ...(interactive ? ['-it'] : []),
     ...dockerArgs,
     ...(mountCwd
