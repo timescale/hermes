@@ -25,7 +25,11 @@ import {
   ensureOpencodeAuth,
   runOpencodeInDocker,
 } from '../services/opencode';
-import { listServices, type TigerService } from '../services/tiger';
+import {
+  isTigerAvailable,
+  listServices,
+  type TigerService,
+} from '../services/tiger';
 import { createTui } from '../services/tui';
 import { ensureGitignore } from '../utils';
 
@@ -57,7 +61,7 @@ export function ConfigWizard({
 }: ConfigWizardProps) {
   // Create all promises immediately (only once via useMemo)
   const configPromise = useMemo(() => projectConfig.read(), []);
-  const servicesPromise = useMemo(() => listServices(), []);
+  const tigerAvailablePromise = useMemo(() => isTigerAvailable(), []);
 
   const [step, setStep] = useState<
     | 'docker'
@@ -73,6 +77,7 @@ export function ConfigWizard({
   );
 
   // Async data - null means still loading
+  const [tigerAvailable, setTigerAvailable] = useState<boolean | null>(null);
   const [services, setServices] = useState<TigerService[] | null>(null);
   const [modelRefreshKey, setModelRefreshKey] = useState(0);
   const modelsMap = useAgentModels(modelRefreshKey);
@@ -81,6 +86,30 @@ export function ConfigWizard({
   const [ghAuthProcess, setGhAuthProcess] = useState<GhAuthProcess | null>(
     null,
   );
+
+  // Total steps depends on whether tiger CLI is available
+  const totalSteps = tigerAvailable === false ? 5 : 6;
+
+  // Step number helper - when tiger is unavailable, service step is skipped
+  const stepNumber = (logicalStep: string): number => {
+    const stepsWithTiger = [
+      'docker',
+      'service',
+      'agent',
+      'model',
+      'agent-auth-check',
+      'gh-auth-check',
+    ];
+    const stepsWithoutTiger = [
+      'docker',
+      'agent',
+      'model',
+      'agent-auth-check',
+      'gh-auth-check',
+    ];
+    const steps = tigerAvailable === false ? stepsWithoutTiger : stepsWithTiger;
+    return steps.indexOf(logicalStep) + 1;
+  };
 
   // Load data from promises
   useEffect(() => {
@@ -98,9 +127,17 @@ export function ConfigWizard({
       );
   }, [configPromise, initialConfig, onComplete]);
 
+  // Check tiger availability, then load services only if available
   useEffect(() => {
-    servicesPromise.then(setServices).catch(() => setServices([]));
-  }, [servicesPromise]);
+    tigerAvailablePromise.then((available) => {
+      setTigerAvailable(available);
+      if (available) {
+        listServices()
+          .then(setServices)
+          .catch(() => setServices([]));
+      }
+    });
+  }, [tigerAvailablePromise]);
 
   // Force refresh models when resuming at the model step (after adding a provider)
   useEffect(() => {
@@ -227,7 +264,7 @@ export function ConfigWizard({
   if (step === 'docker') {
     return (
       <DockerSetup
-        title="Step 1/6: Docker Setup"
+        title={`Step 1/${totalSteps}: Docker Setup`}
         onComplete={(result) => {
           if (result.type === 'cancelled') {
             onComplete({ type: 'cancelled' });
@@ -237,7 +274,10 @@ export function ConfigWizard({
               message: result.error ?? 'Docker setup failed',
             });
           } else {
-            setStep('service');
+            // tigerAvailable is null while still checking, but isTigerAvailable()
+            // resolves near-instantly so it will always be set by the time Docker
+            // setup completes. Default to skipping the service step if somehow unresolved.
+            setStep(tigerAvailable === true ? 'service' : 'agent');
           }
         }}
         showBack={false}
@@ -276,7 +316,7 @@ export function ConfigWizard({
 
     return (
       <Selector
-        title="Step 2/6: Database Service"
+        title={`Step ${stepNumber('service')}/${totalSteps}: Database Service`}
         description="Select a Tiger service to use as the default parent for database forks."
         options={serviceOptions}
         initialIndex={initialIndex >= 0 ? initialIndex : 0}
@@ -299,7 +339,7 @@ export function ConfigWizard({
 
     return (
       <Selector
-        title="Step 3/6: Default Agent"
+        title={`Step ${stepNumber('agent')}/${totalSteps}: Default Agent`}
         description="Select the default coding agent to use."
         options={AGENT_SELECT_OPTIONS}
         initialIndex={initialIndex >= 0 ? initialIndex : 0}
@@ -315,7 +355,7 @@ export function ConfigWizard({
           setStep('model');
         }}
         onCancel={handleCancel}
-        onBack={() => setStep('service')}
+        onBack={() => setStep(tigerAvailable === true ? 'service' : 'docker')}
       />
     );
   }
@@ -333,7 +373,7 @@ export function ConfigWizard({
     if (currentModels.length === 0) {
       return (
         <Selector
-          title={`Step 4/6: Default Model (${config?.agent})`}
+          title={`Step ${stepNumber('model')}/${totalSteps}: Default Model (${config?.agent})`}
           description="Could not load models. You can skip and specify a model later with --model."
           options={[
             {
@@ -374,7 +414,7 @@ export function ConfigWizard({
     if (config?.agent === 'opencode') {
       return (
         <FilterableSelector
-          title={`Step 4/6: Default Model (${config.agent})`}
+          title={`Step ${stepNumber('model')}/${totalSteps}: Default Model (${config.agent})`}
           description={`Select the default model for ${config.agent}.`}
           options={modelOptions}
           initialIndex={initialIndex >= 0 ? initialIndex : 0}
@@ -401,7 +441,7 @@ export function ConfigWizard({
 
     return (
       <Selector
-        title={`Step 4/6: Default Model (${config?.agent})`}
+        title={`Step ${stepNumber('model')}/${totalSteps}: Default Model (${config?.agent})`}
         description={`Select the default model for ${config?.agent}.`}
         options={modelOptions}
         initialIndex={initialIndex >= 0 ? initialIndex : 0}
@@ -418,7 +458,7 @@ export function ConfigWizard({
     const agentName = config?.agent === 'claude' ? 'Claude' : 'Opencode';
     return (
       <Loading
-        title={`Step 5/6: ${agentName} Authentication`}
+        title={`Step ${stepNumber('agent-auth-check')}/${totalSteps}: ${agentName} Authentication`}
         message={`Checking ${agentName} credentials`}
         onCancel={handleCancel}
       />
@@ -431,7 +471,7 @@ export function ConfigWizard({
     // This is async, so we show loading while checking
     return (
       <Loading
-        title="Step 6/6: GitHub Authentication"
+        title={`Step ${stepNumber('gh-auth-check')}/${totalSteps}: GitHub Authentication`}
         message="Checking GitHub authentication"
         onCancel={handleCancel}
       />
