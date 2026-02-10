@@ -14,11 +14,14 @@ import {
   type VirtualFile,
 } from './runInDocker';
 
-const CLAUDE_HOST_CONFIG_DIR = join(homedir(), '.claude');
-const CLAUDE_AUTH_FILE_NAME = '.credentials.json';
+const homePaths = {
+  credentialsJson: join(homedir(), '.claude', '.credentials.json'),
+  configJson: join(homedir(), '.claude.json'),
+};
 
 const containerPaths = {
-  credentialsJson: `${CONTAINER_HOME}/.claude/${CLAUDE_AUTH_FILE_NAME}`,
+  credentialsJson: join(CONTAINER_HOME, '.claude', '.credentials.json'),
+  configJson: join(CONTAINER_HOME, '.claude.json'),
 };
 
 interface ClaudeCredentialsJson {
@@ -54,28 +57,26 @@ const readHostCredentials = async (): Promise<ClaudeCredentialsJson | null> => {
         'Failed to read claude credentials from macOS keychain.',
       );
     }
-  }
-
-  // Look in the OS keyring
-  try {
-    const credsEntry = new AsyncEntry('Claude Code-credentials', username);
-    const creds = JSON.parse(
-      (await credsEntry.getPassword()) || '{}',
-    ) as ClaudeCredentialsJson;
-    if (claudeCredsValid(creds)) {
-      log.debug('Found valid claude credentials in OS keyring');
-      return creds;
+  } else {
+    // Look in the OS keyring
+    try {
+      const credsEntry = new AsyncEntry('Claude Code-credentials', username);
+      const creds = JSON.parse(
+        (await credsEntry.getPassword()) || '{}',
+      ) as ClaudeCredentialsJson;
+      if (claudeCredsValid(creds)) {
+        log.debug('Found valid claude credentials in OS keyring');
+        return creds;
+      }
+      log.debug('Claude credentials present in OS keyring, but invalid.');
+    } catch (err) {
+      log.debug({ err }, 'Failed to read claude credentials from OS keyring.');
     }
-    log.debug('Claude credentials present in OS keyring, but invalid.');
-  } catch (err) {
-    log.debug({ err }, 'Failed to read claude credentials from OS keyring.');
   }
 
   // Look for a file in the home directory
   try {
-    const hostCredsFile = file(
-      join(CLAUDE_HOST_CONFIG_DIR, CLAUDE_AUTH_FILE_NAME),
-    );
+    const hostCredsFile = file(homePaths.credentialsJson);
     if (!(await hostCredsFile.exists())) return null;
     const creds = await hostCredsFile.json();
     if (claudeCredsValid(creds)) {
@@ -98,10 +99,7 @@ const readHermesCredentialCache =
         log.debug('Found valid claude credentials in hermes keyring');
         return creds;
       }
-      log.debug(
-        { creds },
-        'Claude credentials present in hermes keyring, but invalid.',
-      );
+      log.debug('Claude credentials present in hermes keyring, but invalid.');
     } catch {
       log.debug('No claude/.credentials.json found in hermes keyring');
     }
@@ -114,7 +112,7 @@ const writeHermesCredentialCache = async (
   await credsEntry.setPassword(JSON.stringify(creds));
 };
 
-export const captureClaudeCredentialsFromContainer = async (
+const captureClaudeCredentialsJsonFromContainer = async (
   containerId: string,
 ): Promise<boolean> => {
   try {
@@ -135,13 +133,138 @@ export const captureClaudeCredentialsFromContainer = async (
   return false;
 };
 
+interface ClaudeConfigJson {
+  primaryApiKey?: string;
+}
+
+const baseConfig = {
+  numStartups: 1,
+  installMethod: 'native',
+  autoUpdates: false,
+  hasCompletedOnboarding: true,
+  bypassPermissionsModeAccepted: true,
+  projects: {
+    '/work': {
+      allowedTools: [],
+      mcpContextUris: [],
+      mcpServers: {},
+      enabledMcpjsonServers: [],
+      disabledMcpjsonServers: [],
+      hasTrustDialogAccepted: true,
+    },
+  },
+};
+
+const readHostConfigApiKey = async (): Promise<string | null> => {
+  const { username } = userInfo();
+  if (isMac()) {
+    // Prefer this method on mac, to avoid any prompt for credentials
+    try {
+      const secretResult =
+        await Bun.$`security find-generic-password -s "Claude Code" -a "${username}" -w`.quiet();
+      const key = secretResult.text();
+      if (key) {
+        log.debug('Found claude API key in macOS keychain');
+        return key;
+      }
+    } catch (err) {
+      log.debug({ err }, 'Failed to read claude API key from macOS keychain.');
+    }
+  } else {
+    // Look in the OS keyring
+    try {
+      const apiKeyEntry = new AsyncEntry('Claude Code', username);
+      const key = await apiKeyEntry.getPassword();
+      if (key) {
+        log.debug('Found claude API key in OS keyring');
+        return key;
+      }
+    } catch (err) {
+      log.debug({ err }, 'Failed to read claude API key from OS keyring.');
+    }
+  }
+
+  // Look for a file in the home directory
+  try {
+    const hostConfigFile = file(homePaths.configJson);
+    if (!(await hostConfigFile.exists())) return null;
+    const config: ClaudeConfigJson = await hostConfigFile.json();
+    if (config.primaryApiKey) {
+      log.debug('Found claude API key in home directory');
+      return config.primaryApiKey;
+    }
+    log.debug('Claude config present in home directory, but no API key.');
+  } catch (err) {
+    log.debug({ err }, 'Failed to read claude config from file.');
+  }
+  return null;
+};
+
+const configEntry = new AsyncEntry('hermes', '.claude.json/primaryApiKey');
+const readHermesApiKeyCache = async (): Promise<string | null> => {
+  try {
+    const key = await configEntry.getPassword();
+    if (key) {
+      log.debug('Found claude API key in hermes keyring');
+      return key;
+    }
+    log.debug('Claude credentials present in hermes keyring, but invalid.');
+  } catch {
+    log.debug('No .claude.json/primaryApiKey found in hermes keyring');
+  }
+  return null;
+};
+
+const writeHermesApiKeyCache = async (key: string): Promise<void> => {
+  await configEntry.setPassword(key);
+};
+
+export const captureClaudeApiKeyFromContainer = async (
+  containerId: string,
+): Promise<boolean> => {
+  try {
+    const content = await readFileFromContainer(
+      containerId,
+      containerPaths.configJson,
+    );
+    const config = JSON.parse(content) as ClaudeConfigJson;
+    if (config.primaryApiKey) {
+      log.debug('Claude API key found in container');
+      await writeHermesApiKeyCache(config.primaryApiKey);
+      return true;
+    }
+  } catch {
+    log.debug('No claude API key found in container');
+  }
+  return false;
+};
+
+export const captureClaudeCredentialsFromContainer = async (
+  containerId: string,
+): Promise<boolean> => {
+  return (
+    (await captureClaudeCredentialsJsonFromContainer(containerId)) ||
+    (await captureClaudeApiKeyFromContainer(containerId))
+  );
+};
+
 export const getClaudeConfigFiles = async (): Promise<VirtualFile[]> => {
   const creds: ClaudeCredentialsJson =
     (await readHostCredentials()) || (await readHermesCredentialCache()) || {};
+  const apiKey =
+    (await readHostConfigApiKey()) || (await readHermesApiKeyCache());
+  const config = {
+    ...baseConfig,
+    ...(apiKey ? { primaryApiKey: apiKey } : null),
+  };
   return [
     {
       path: containerPaths.credentialsJson,
       value: JSON.stringify(creds),
+    },
+    {
+      path: containerPaths.configJson,
+      value: JSON.stringify(config),
     },
   ];
 };
