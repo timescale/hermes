@@ -71,30 +71,28 @@ ensure_path_configured() {
     echo ""
     echo -e "${YELLOW}!${NC} $INSTALL_DIR is not in your PATH"
 
-    # Check if rc file needs modification
-    if [ -f "$SHELL_RC" ]; then
-      # shellcheck disable=SC2016
-      if ! grep -q 'export PATH="\$HOME/.local/bin:\$PATH"' "$SHELL_RC"; then
-        if is_interactive; then
-          if prompt_yn "Add $INSTALL_DIR to PATH in $SHELL_RC?"; then
-            {
-              echo ""
-              echo '# Added by hermes installer'
-              # shellcheck disable=SC2016
-              echo 'export PATH="$HOME/.local/bin:$PATH"'
-            } >> "$SHELL_RC"
-            echo -e "${GREEN}✓${NC} Added $INSTALL_DIR to PATH in $SHELL_RC"
-          else
-            echo ""
-            echo "To add it manually, run:"
-            echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $SHELL_RC"
-          fi
-        else
+    # Check if rc file already has ~/.local/bin in PATH
+    # shellcheck disable=SC2016
+    if grep -qE '(^|:)\$HOME/\.local/bin(:|"|\s|$)|\.local/bin' "$SHELL_RC" 2>/dev/null; then
+      : # PATH already configured
+    elif is_interactive; then
+      if prompt_yn "Add $INSTALL_DIR to PATH in $SHELL_RC?"; then
+        {
           echo ""
-          echo "To add it manually, run:"
-          echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $SHELL_RC"
-        fi
+          echo '# Added by hermes installer'
+          # shellcheck disable=SC2016
+          echo 'export PATH="$HOME/.local/bin:$PATH"'
+        } >> "$SHELL_RC"
+        echo -e "${GREEN}✓${NC} Added $INSTALL_DIR to PATH in $SHELL_RC"
+      else
+        echo ""
+        echo "To add it manually, run:"
+        echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $SHELL_RC"
       fi
+    else
+      echo ""
+      echo "To add it manually, run:"
+      echo "  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> $SHELL_RC"
     fi
 
     # Export for current session
@@ -126,23 +124,45 @@ configure_shell_completions() {
     return
   fi
 
+  # For zsh, ensure compinit is loaded (required for compdef)
+  local needs_compinit=false
+  if [ "$shell_type" = "zsh" ]; then
+    if ! grep -qE '(compinit|oh-my-zsh|prezto|zinit|antigen|zplug|zgenom)' "$SHELL_RC" 2>/dev/null; then
+      needs_compinit=true
+    fi
+  fi
+
   if is_interactive; then
     if prompt_yn "Add shell completions to $SHELL_RC?"; then
       {
+        if [ "$needs_compinit" = true ]; then
+          echo ""
+          echo "# Initialize zsh completions"
+          echo "autoload -Uz compinit && compinit -i"
+        fi
         echo ""
         echo "# Hermes shell completions"
-        echo "source <(hermes complete $shell_type)"
+        echo "command -v hermes &>/dev/null && source <(hermes complete $shell_type)"
       } >> "$SHELL_RC"
       echo -e "${GREEN}✓${NC} Added shell completions to $SHELL_RC"
+      if [ "$needs_compinit" = true ]; then
+        echo -e "${GREEN}✓${NC} Added compinit initialization to $SHELL_RC"
+      fi
     else
       echo ""
-      echo "To add shell completions manually, run:"
-      echo "  echo 'source <(hermes complete $shell_type)' >> $SHELL_RC"
+      echo "To add shell completions manually, add the following to $SHELL_RC:"
+      if [ "$needs_compinit" = true ]; then
+        echo "  autoload -Uz compinit && compinit -i"
+      fi
+      echo "  command -v hermes &>/dev/null && source <(hermes complete $shell_type)"
     fi
   else
     echo ""
-    echo "To add shell completions manually, run:"
-    echo "  echo 'source <(hermes complete $shell_type)' >> $SHELL_RC"
+    echo "To add shell completions manually, add the following to $SHELL_RC:"
+    if [ "$needs_compinit" = true ]; then
+      echo "  autoload -Uz compinit && compinit -i"
+    fi
+    echo "  command -v hermes &>/dev/null && source <(hermes complete $shell_type)"
   fi
 }
 
