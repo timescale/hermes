@@ -53,25 +53,6 @@ RUN groupadd --gid ${USER_GID} ${USER_NAME} \
 # Install claude code as non-root user
 USER ${USER_NAME}
 RUN curl -fsSL https://claude.ai/install.sh | bash
-RUN cat <<'EOF' > /home/${USER_NAME}/.claude.json
-{
-  "numStartups": 1,
-  "installMethod": "native",
-  "autoUpdates": false,
-  "hasCompletedOnboarding": true,
-  "bypassPermissionsModeAccepted": true,
-  "projects": {
-    "/work": {
-      "allowedTools": [],
-      "mcpContextUris": [],
-      "mcpServers": {},
-      "enabledMcpjsonServers": [],
-      "disabledMcpjsonServers": [],
-      "hasTrustDialogAccepted": true
-    }
-  }
-}
-EOF
 
 # tiger CLI
 RUN curl -fsSL https://cli.tigerdata.com | sh
