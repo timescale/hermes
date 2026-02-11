@@ -46,7 +46,7 @@ export async function listServices(): Promise<TigerService[]> {
  */
 export async function isTigerAvailable(): Promise<boolean> {
   try {
-    await Bun.$`tiger --version`.quiet();
+    await Bun.$`tiger version`.quiet();
     return true;
   } catch {
     return false;
