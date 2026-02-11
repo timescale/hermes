@@ -27,7 +27,9 @@ afterAll(async () => {
   ]);
 });
 
-describe('keyring', () => {
+// Skip in CI where the OS credential store is not available.
+// (macOS keychain requires a GUI session; Linux requires D-Bus/libsecret)
+describe.skipIf(!!process.env.CI)('keyring', () => {
   test('setSecret and getSecret round-trip', async () => {
     await setSecret(TEST_SERVICE, TEST_ACCOUNT, TEST_VALUE);
     const result = await getSecret(TEST_SERVICE, TEST_ACCOUNT);
@@ -87,7 +89,7 @@ describe('keyring', () => {
   });
 });
 
-describe('hermes convenience wrappers', () => {
+describe.skipIf(!!process.env.CI)('hermes convenience wrappers', () => {
   const account = `${TEST_ACCOUNT}-hermes`;
 
   test('setHermesSecret and getHermesSecret round-trip', async () => {
