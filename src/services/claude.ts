@@ -246,8 +246,15 @@ export const runClaudeInDocker = async ({
 > => {
   const configFiles = await getClaudeConfigFiles();
 
+  const effectiveDockerArgs = [
+    ...dockerArgs,
+    ...(process.env.COLORTERM
+      ? ['-e', `COLORTERM=${process.env.COLORTERM}`]
+      : []),
+  ];
+
   const result = await runInDocker({
-    dockerArgs,
+    dockerArgs: effectiveDockerArgs,
     cmdArgs,
     cmdName: 'claude',
     dockerImage,

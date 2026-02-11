@@ -160,8 +160,15 @@ export const runOpencodeInDocker = async ({
 > => {
   const configFiles = await getOpencodeConfigFiles();
 
+  const effectiveDockerArgs = [
+    ...dockerArgs,
+    ...(process.env.COLORTERM
+      ? ['-e', `COLORTERM=${process.env.COLORTERM}`]
+      : []),
+  ];
+
   const result = await runInDocker({
-    dockerArgs,
+    dockerArgs: effectiveDockerArgs,
     cmdArgs,
     cmdName: 'opencode',
     dockerImage,
