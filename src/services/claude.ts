@@ -1,11 +1,10 @@
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
-import { AsyncEntry } from '@napi-rs/keyring';
-import { isMac } from 'build-strap';
 import { file } from 'bun';
 import { runClaudeAuthScreen } from '../components/ClaudeAuth';
 import { Deferred } from '../types/deferred';
 import { CONTAINER_HOME, readFileFromContainer } from './dockerFiles';
+import { getHermesSecret, getSecret, setHermesSecret } from './keyring';
 import { log } from './logger';
 import {
   type RunInDockerOptionsBase,
@@ -40,38 +39,18 @@ const claudeCredsValid = (creds?: ClaudeCredentialsJson | null): boolean => {
 
 const readHostCredentials = async (): Promise<ClaudeCredentialsJson | null> => {
   const { username } = userInfo();
-  if (isMac()) {
-    // Prefer this method on mac, to avoid any prompt for credentials
-    try {
-      const secretResult =
-        await Bun.$`security find-generic-password -s "Claude Code-credentials" -a "${username}" -w`.quiet();
-      const creds = secretResult.json() as ClaudeCredentialsJson;
-      if (claudeCredsValid(creds)) {
-        log.debug('Found valid claude credentials in macOS keychain');
-        return creds;
-      }
-      log.debug('Claude credentials present in macOS keychain, but invalid.');
-    } catch (err) {
-      log.debug(
-        { err },
-        'Failed to read claude credentials from macOS keychain.',
-      );
-    }
-  } else {
-    // Look in the OS keyring
-    try {
-      const credsEntry = new AsyncEntry('Claude Code-credentials', username);
-      const creds = JSON.parse(
-        (await credsEntry.getPassword()) || '{}',
-      ) as ClaudeCredentialsJson;
+  try {
+    const raw = await getSecret('Claude Code-credentials', username);
+    if (raw) {
+      const creds = JSON.parse(raw) as ClaudeCredentialsJson;
       if (claudeCredsValid(creds)) {
         log.debug('Found valid claude credentials in OS keyring');
         return creds;
       }
       log.debug('Claude credentials present in OS keyring, but invalid.');
-    } catch (err) {
-      log.debug({ err }, 'Failed to read claude credentials from OS keyring.');
     }
+  } catch (err) {
+    log.debug({ err }, 'Failed to read claude credentials from OS keyring.');
   }
 
   // Look for a file in the home directory
@@ -90,13 +69,13 @@ const readHostCredentials = async (): Promise<ClaudeCredentialsJson | null> => {
   return null;
 };
 
-const credsEntry = new AsyncEntry('hermes', 'claude/.credentials.json');
+const HERMES_CREDS_ACCOUNT = 'claude/.credentials.json';
+
 const readHermesCredentialCache =
   async (): Promise<ClaudeCredentialsJson | null> => {
     try {
-      const creds = JSON.parse(
-        (await credsEntry.getPassword()) || '{}',
-      ) as ClaudeCredentialsJson;
+      const raw = await getHermesSecret(HERMES_CREDS_ACCOUNT);
+      const creds = JSON.parse(raw || '{}') as ClaudeCredentialsJson;
       if (claudeCredsValid(creds)) {
         log.debug('Found valid claude credentials in hermes keyring');
         return creds;
@@ -111,7 +90,7 @@ const readHermesCredentialCache =
 const writeHermesCredentialCache = async (
   creds: ClaudeCredentialsJson,
 ): Promise<void> => {
-  await credsEntry.setPassword(JSON.stringify(creds));
+  await setHermesSecret(HERMES_CREDS_ACCOUNT, JSON.stringify(creds));
 };
 
 const captureClaudeCredentialsJsonFromContainer = async (
@@ -159,31 +138,14 @@ const baseConfig = {
 
 const readHostConfigApiKey = async (): Promise<string | null> => {
   const { username } = userInfo();
-  if (isMac()) {
-    // Prefer this method on mac, to avoid any prompt for credentials
-    try {
-      const secretResult =
-        await Bun.$`security find-generic-password -s "Claude Code" -a "${username}" -w`.quiet();
-      const key = secretResult.text();
-      if (key) {
-        log.debug('Found claude API key in macOS keychain');
-        return key;
-      }
-    } catch (err) {
-      log.debug({ err }, 'Failed to read claude API key from macOS keychain.');
+  try {
+    const key = await getSecret('Claude Code', username);
+    if (key) {
+      log.debug('Found claude API key in OS keyring');
+      return key;
     }
-  } else {
-    // Look in the OS keyring
-    try {
-      const apiKeyEntry = new AsyncEntry('Claude Code', username);
-      const key = await apiKeyEntry.getPassword();
-      if (key) {
-        log.debug('Found claude API key in OS keyring');
-        return key;
-      }
-    } catch (err) {
-      log.debug({ err }, 'Failed to read claude API key from OS keyring.');
-    }
+  } catch (err) {
+    log.debug({ err }, 'Failed to read claude API key from OS keyring.');
   }
 
   // Look for a file in the home directory
@@ -202,10 +164,11 @@ const readHostConfigApiKey = async (): Promise<string | null> => {
   return null;
 };
 
-const configEntry = new AsyncEntry('hermes', '.claude.json/primaryApiKey');
+const HERMES_APIKEY_ACCOUNT = '.claude.json/primaryApiKey';
+
 const readHermesApiKeyCache = async (): Promise<string | null> => {
   try {
-    const key = await configEntry.getPassword();
+    const key = await getHermesSecret(HERMES_APIKEY_ACCOUNT);
     if (key) {
       log.debug('Found claude API key in hermes keyring');
       return key;
@@ -218,7 +181,7 @@ const readHermesApiKeyCache = async (): Promise<string | null> => {
 };
 
 const writeHermesApiKeyCache = async (key: string): Promise<void> => {
-  await configEntry.setPassword(key);
+  await setHermesSecret(HERMES_APIKEY_ACCOUNT, key);
 };
 
 export const captureClaudeApiKeyFromContainer = async (

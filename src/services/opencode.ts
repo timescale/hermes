@@ -1,10 +1,10 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { AsyncEntry } from '@napi-rs/keyring';
 import { file } from 'bun';
 import { Deferred } from '../types/deferred';
 import { readConfig } from './config';
 import { CONTAINER_HOME, readFileFromContainer } from './dockerFiles';
+import { getHermesSecret, setHermesSecret } from './keyring';
 import { log } from './logger';
 import {
   type RunInDockerOptionsBase,
@@ -61,14 +61,13 @@ const readHostCredentials = async (): Promise<OpencodeAuthJson | null> => {
   return null;
 };
 
-const credsEntry = new AsyncEntry('hermes', 'opencode/auth.json');
+const HERMES_OPENCODE_ACCOUNT = 'opencode/auth.json';
 
 const readHermesCredentialCache =
   async (): Promise<OpencodeAuthJson | null> => {
     try {
-      const creds = JSON.parse(
-        (await credsEntry.getPassword()) || '{}',
-      ) as OpencodeAuthJson;
+      const raw = await getHermesSecret(HERMES_OPENCODE_ACCOUNT);
+      const creds = JSON.parse(raw || '{}') as OpencodeAuthJson;
       if (authCredsValid(creds)) {
         log.debug('Found valid opencode credentials in hermes keyring');
         return creds;
@@ -83,7 +82,7 @@ const readHermesCredentialCache =
 const writeHermesCredentialCache = async (
   creds: OpencodeAuthJson,
 ): Promise<void> => {
-  await credsEntry.setPassword(JSON.stringify(creds));
+  await setHermesSecret(HERMES_OPENCODE_ACCOUNT, JSON.stringify(creds));
 };
 
 /**

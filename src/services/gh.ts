@@ -1,8 +1,8 @@
 import { join } from 'node:path';
-import { AsyncEntry } from '@napi-rs/keyring';
 import { YAML } from 'bun';
 import { Deferred } from '../types/deferred';
 import { CONTAINER_HOME, readFileFromContainer } from './dockerFiles';
+import { getHermesSecret, setHermesSecret } from './keyring';
 import { log } from './logger';
 import {
   type RunInDockerOptionsBase,
@@ -66,11 +66,11 @@ const readHostCredentials = async (): Promise<GhHostsYml | null> => {
   }
 };
 
-const credsEntry = new AsyncEntry('hermes', 'gh/hosts.yml');
+const HERMES_GH_ACCOUNT = 'gh/hosts.yml';
 
 const readHermesCredentialCache = async (): Promise<GhHostsYml | null> => {
   try {
-    const raw = await credsEntry.getPassword();
+    const raw = await getHermesSecret(HERMES_GH_ACCOUNT);
     if (!raw) {
       log.debug('No gh/hosts.yml found in hermes keyring');
       return null;
@@ -90,7 +90,7 @@ const readHermesCredentialCache = async (): Promise<GhHostsYml | null> => {
 export const writeGhCredentialCache = async (
   creds: GhHostsYml,
 ): Promise<void> => {
-  await credsEntry.setPassword(YAML.stringify(creds));
+  await setHermesSecret(HERMES_GH_ACCOUNT, YAML.stringify(creds));
 };
 
 /**
