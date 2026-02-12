@@ -1,6 +1,6 @@
 {
   "name": "hermes",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "module": "index.ts",
   "scripts": {
     "build": "./bun build ./index.ts --compile --outfile ./bin/hermes",
