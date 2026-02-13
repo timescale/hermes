@@ -119,8 +119,27 @@ export const captureGhCredentialsFromContainer = async (
 
 /**
  * Get the best available gh credentials (host first, then keyring cache).
+ * This is a read-only operation — it never writes to the keyring.
  */
 const resolveCredentials = async (): Promise<GhHostsYml> => {
+  const hostCreds = await readHostCredentials();
+  if (hostCreds && ghCredsValid(hostCreds)) {
+    return hostCreds;
+  }
+
+  const cachedCreds = await readHermesCredentialCache();
+  if (cachedCreds && ghCredsValid(cachedCreds)) {
+    return cachedCreds;
+  }
+
+  return {};
+};
+
+/**
+ * Resolve credentials and cache them in the keyring.
+ * Use this only from explicit interactive flows where credentials may have changed.
+ */
+const resolveAndCacheCredentials = async (): Promise<GhHostsYml> => {
   const hostCreds = await readHostCredentials();
   if (hostCreds && ghCredsValid(hostCreds)) {
     // Cache host creds in keyring for when host gh isn't available
@@ -138,9 +157,19 @@ const resolveCredentials = async (): Promise<GhHostsYml> => {
 
 /**
  * Get the gh config as VirtualFile(s) to write into containers.
+ *
+ * @param saveCredentials - When true, caches host credentials to the keyring.
+ *   Defaults to false (read-only). Only pass true from interactive flows where
+ *   credentials may have been modified.
  */
-export const getGhConfigFiles = async (): Promise<VirtualFile[]> => {
-  const creds = await resolveCredentials();
+export const getGhConfigFiles = async ({
+  saveCredentials = false,
+}: {
+  saveCredentials?: boolean;
+} = {}): Promise<VirtualFile[]> => {
+  const creds = saveCredentials
+    ? await resolveAndCacheCredentials()
+    : await resolveCredentials();
   return [
     {
       path: containerPaths.hostsYml,
@@ -148,6 +177,16 @@ export const getGhConfigFiles = async (): Promise<VirtualFile[]> => {
     },
   ];
 };
+
+interface RunGhInDockerOptions extends RunInDockerOptionsBase {
+  /**
+   * When true, credentials are written to the OS keyring on resolution and
+   * captured back from the container after it exits. Defaults to false.
+   * Only enable for interactive flows where the user may have modified
+   * credentials (e.g. `hermes gh auth login`).
+   */
+  saveCredentials?: boolean;
+}
 
 export const runGhInDocker = async ({
   dockerArgs = [],
@@ -157,10 +196,11 @@ export const runGhInDocker = async ({
   shouldThrow = true,
   files = [],
   mountCwd,
-}: RunInDockerOptionsBase): Promise<
+  saveCredentials = false,
+}: RunGhInDockerOptions): Promise<
   RunInDockerResult & { credsCaptured: Promise<boolean> }
 > => {
-  const configFiles = await getGhConfigFiles();
+  const configFiles = await getGhConfigFiles({ saveCredentials });
 
   const result = await runInDocker({
     dockerArgs,
@@ -180,6 +220,10 @@ export const runGhInDocker = async ({
       .then(async (code) => {
         if (code) {
           log.debug(`gh exited with code ${code}, not saving credentials`);
+          deferredCredsCaptured.resolve(false);
+          return;
+        }
+        if (!saveCredentials) {
           deferredCredsCaptured.resolve(false);
           return;
         }

@@ -26,6 +26,7 @@ export const ghCommand = new Command('gh')
         cmdArgs: args,
         interactive: true,
         mountCwd: options.mount,
+        saveCredentials: true,
       });
       process.exit(await proc.exited);
     } catch (err) {
