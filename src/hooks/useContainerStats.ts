@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { type ContainerStats, getContainerStats } from '../services/docker';
 import { log } from '../services/logger';
 
@@ -9,6 +9,9 @@ const STATS_POLL_INTERVAL = 1000;
  * Hook that polls `docker stats` every second for the given running container IDs.
  * Returns a Map<containerId, ContainerStats>.
  * Only fetches when there are running container IDs provided.
+ *
+ * Important: callers must pass a stable (memoized) array reference to avoid
+ * restarting the polling interval on every render.
  */
 export function useContainerStats(
   containerIds: string[],
@@ -17,34 +20,21 @@ export function useContainerStats(
     () => new Map(),
   );
 
-  // Stable key that changes only when the set of IDs changes
-  const idsKey = useMemo(
-    () => containerIds.slice().sort().join(','),
-    [containerIds],
-  );
-
-  // Keep a stable reference to the latest IDs to avoid stale closures
-  const idsRef = useRef(containerIds);
-  idsRef.current = containerIds;
-
   useEffect(() => {
-    if (idsKey === '') {
-      log.debug('No running containers, skipping stats polling');
+    if (containerIds.length === 0) {
       setStats(new Map());
       return;
     }
 
-    log.debug({ idsKey }, 'Starting container stats polling');
+    log.debug({ containerIds }, 'Starting container stats polling');
     let cancelled = false;
 
     const fetchStats = async () => {
       if (cancelled) return;
-      const ids = idsRef.current;
-      if (ids.length === 0) return;
-      const result = await getContainerStats(ids);
+      const result = await getContainerStats(containerIds);
       if (!cancelled) {
         log.trace(
-          { statsCount: result.size, containerCount: ids.length },
+          { statsCount: result.size, containerCount: containerIds.length },
           'Container stats update',
         );
         setStats(result);
@@ -60,7 +50,7 @@ export function useContainerStats(
       cancelled = true;
       clearInterval(interval);
     };
-  }, [idsKey]);
+  }, [containerIds]);
 
   return stats;
 }

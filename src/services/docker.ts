@@ -833,12 +833,9 @@ export async function getContainerStats(
       await $`docker stats --no-stream --format ${format} ${containerIds}`
         .quiet()
         .nothrow();
-    const stdout = output.stdout.toString().trim();
-    const stderr = output.stderr.toString().trim();
-
     if (output.exitCode !== 0) {
       log.warn(
-        { exitCode: output.exitCode, stderr },
+        { exitCode: output.exitCode, stderr: output.stderr.toString() },
         'docker stats exited with non-zero code',
       );
       return result;
@@ -849,8 +846,7 @@ export async function getContainerStats(
       'Fetched container stats',
     );
 
-    const lines = stdout.split('\n').filter(Boolean);
-
+    const lines = output.text().trim().split('\n');
     for (const line of lines) {
       try {
         const data: DockerStatsJson = JSON.parse(line);

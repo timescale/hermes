@@ -1,6 +1,6 @@
 import { useKeyboard } from '@opentui/react';
 import open from 'open';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useContainerStats } from '../hooks/useContainerStats';
 import { useWindowSize } from '../hooks/useWindowSize';
 import { copyToClipboard } from '../services/clipboard';
@@ -109,7 +109,10 @@ export function SessionDetail({
   const isStopped = session.status === 'exited' || session.status === 'dead';
 
   // Poll CPU/memory stats for running containers
-  const statsIds = isRunning ? [session.containerId] : [];
+  const statsIds = useMemo(
+    () => (isRunning ? [session.containerId] : []),
+    [isRunning, session.containerId],
+  );
   const containerStats = useContainerStats(statsIds);
   const stats = containerStats.get(session.containerId);
 
