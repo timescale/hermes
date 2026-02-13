@@ -1,6 +1,7 @@
 import type { KeyEvent, ScrollBoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
-import { useEffect, useRef, useState } from 'react';
+import fuzzysort from 'fuzzysort';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../stores/themeStore.ts';
 import { HotkeysBar } from './HotkeysBar';
 import {
@@ -53,14 +54,24 @@ export function FilterableSelector({
   const [selectedIndex, setSelectedIndex] = useState(computedInitialIndex);
   const hasInitialScrolled = useRef(false);
 
-  // Filter options based on text input
-  const filteredOptions = options.filter((opt) => {
-    const searchText = filterText.toLowerCase();
-    return (
-      opt.name.toLowerCase().includes(searchText) ||
-      (opt.description?.toLowerCase().includes(searchText) ?? false)
-    );
-  });
+  // Filter options via fuzzysort when there's a search query
+  const filteredOptions = useMemo(
+    () =>
+      filterText
+        ? fuzzysort
+            .go(filterText, options, {
+              keys: ['name', 'description'],
+              scoreFn: (r) =>
+                Math.max(
+                  r[0]?.score ?? 0, // name (full weight)
+                  (r[1]?.score ?? 0) * 0.5, // description (reduced)
+                ),
+              threshold: 0.3,
+            })
+            .map((r) => r.obj)
+        : options,
+    [filterText, options],
+  );
 
   // Clamp selected index to valid range for filtered options
   const clampedIndex = Math.min(

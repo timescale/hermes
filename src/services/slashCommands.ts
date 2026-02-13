@@ -3,6 +3,8 @@
 // Defines the slash command interface and built-in commands
 // ============================================================================
 
+import fuzzysort from 'fuzzysort';
+
 export interface SlashCommand {
   /** The command name (e.g., "theme" for /theme) */
   name: string;
@@ -15,19 +17,25 @@ export interface SlashCommand {
 }
 
 /**
- * Filter slash commands based on partial input.
+ * Filter slash commands based on partial input using fuzzy search.
  * Used when user types "/" followed by characters.
  */
 export function filterSlashCommands(
   commands: SlashCommand[],
   query: string,
 ): SlashCommand[] {
-  const lowerQuery = query.toLowerCase();
-  return commands.filter(
-    (cmd) =>
-      cmd.name.toLowerCase().includes(lowerQuery) ||
-      cmd.description.toLowerCase().includes(lowerQuery),
-  );
+  if (!query) return commands;
+  return fuzzysort
+    .go(query, commands, {
+      keys: ['name', 'description'],
+      scoreFn: (r) =>
+        Math.max(
+          r[0]?.score ?? 0, // name (full weight)
+          (r[1]?.score ?? 0) * 0.5, // description (reduced)
+        ),
+      threshold: 0.3,
+    })
+    .map((r) => r.obj);
 }
 
 /**

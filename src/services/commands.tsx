@@ -5,7 +5,13 @@
 import { RGBA, TextAttributes } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
 import fuzzysort from 'fuzzysort';
-import { type DependencyList, useEffect, useRef, useState } from 'react';
+import {
+  type DependencyList,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { create } from 'zustand';
 import { useTheme } from '../stores/themeStore.ts';
 import { log } from './logger';
@@ -335,18 +341,21 @@ function CommandPalette() {
   const visibleCommands = getVisibleCommands(allCommands);
 
   // Filter via fuzzysort when there's a search query
-  const filtered: Command[] = (() => {
+  const filtered: Command[] = useMemo(() => {
     if (!filter) return visibleCommands;
     const results = fuzzysort.go(filter, visibleCommands, {
-      keys: ['title', 'category'],
-      scoreFn: (r) => {
-        const titleScore = r[0]?.score ?? 0;
-        const categoryScore = r[1]?.score ?? 0;
-        return titleScore * 2 + categoryScore;
-      },
+      keys: ['title', 'description', 'category'],
+      scoreFn: (r) =>
+        Math.max(
+          r[0]?.score ?? 0, // title (full weight)
+          (r[1]?.score ?? 0) * 0.5, // description (reduced)
+          (r[2]?.score ?? 0) * 0.5, // category (reduced)
+        ),
+      threshold: 0.3,
+      limit: 50,
     });
     return results.map((r) => r.obj);
-  })();
+  }, [filter, visibleCommands]);
 
   // Group by category (preserve order within groups)
   const grouped: [string, Command[]][] = (() => {

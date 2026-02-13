@@ -1,7 +1,8 @@
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
+import fuzzysort from 'fuzzysort';
 import open from 'open';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCommandStore, useRegisterCommands } from '../services/commands.tsx';
 import {
   type HermesSession,
@@ -132,39 +133,47 @@ export function SessionsList({
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 
-  // Filter sessions based on text, mode, and scope
-  const filteredSessions = sessions.filter((session) => {
-    // Scope filter (only when in a repo)
-    if (currentRepo && scopeMode === 'local' && session.repo !== currentRepo) {
-      return false;
-    }
+  // Filter sessions: first by scope/mode, then fuzzy text search
+  const filteredSessions = useMemo(() => {
+    // Pre-filter by scope and mode (boolean filters)
+    const preFiltered = sessions.filter((session) => {
+      if (
+        currentRepo &&
+        scopeMode === 'local' &&
+        session.repo !== currentRepo
+      ) {
+        return false;
+      }
+      if (filterMode === 'running' && session.status !== 'running') {
+        return false;
+      }
+      if (filterMode === 'completed' && session.status === 'running') {
+        return false;
+      }
+      return true;
+    });
 
-    // Mode filter
-    if (filterMode === 'running' && session.status !== 'running') {
-      return false;
-    }
-    if (filterMode === 'completed' && session.status === 'running') {
-      return false;
-    }
-
-    // Text filter (search name, branch, repo, prompt)
-    if (filterText) {
-      const searchText = filterText.toLowerCase();
-      const matches =
-        session.name.toLowerCase().includes(searchText) ||
-        session.branch.toLowerCase().includes(searchText) ||
-        session.repo.toLowerCase().includes(searchText) ||
-        session.prompt.toLowerCase().includes(searchText);
-      if (!matches) return false;
-    }
-
-    return true;
-  });
+    // Fuzzy text search via fuzzysort (replaces String.includes)
+    if (!filterText) return preFiltered;
+    return fuzzysort
+      .go(filterText, preFiltered, {
+        keys: ['name', 'branch', 'repo', 'prompt'],
+        scoreFn: (r) =>
+          Math.max(
+            r[0]?.score ?? 0, // name (full weight)
+            r[3]?.score ?? 0, // prompt (full weight)
+            (r[1]?.score ?? 0) * 0.5, // branch (reduced)
+            (r[2]?.score ?? 0) * 0.5, // repo (reduced)
+          ),
+        threshold: 0.3,
+      })
+      .map((r) => r.obj);
+  }, [filterText, filterMode, scopeMode, sessions, currentRepo]);
 
   // Compute selected index from session ID
   // If the selected session is in the filtered list, use its index
   // Otherwise, fall back to 0 (first item)
-  const selectedIndex = (() => {
+  const selectedIndex = useMemo(() => {
     if (selectedSessionId) {
       const index = filteredSessions.findIndex(
         (s) => s.containerId === selectedSessionId,
@@ -172,7 +181,7 @@ export function SessionsList({
       if (index >= 0) return index;
     }
     return 0;
-  })();
+  }, [filteredSessions, selectedSessionId]);
 
   // Helper to select by index (updates the store with session ID)
   const selectByIndex = useCallback(

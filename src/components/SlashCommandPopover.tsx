@@ -4,6 +4,7 @@
 
 import type { BoxRenderable } from '@opentui/core';
 import { flushSync, useKeyboard } from '@opentui/react';
+import fuzzysort from 'fuzzysort';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SlashCommand } from '../services/slashCommands.ts';
 import { useTheme } from '../stores/themeStore.ts';
@@ -38,12 +39,23 @@ export function SlashCommandPopover({
   const lastQueryRef = useRef(query);
   const [position, setPosition] = useState({ x: 0, y: 0, width: 0 });
 
-  // Filter commands based on query
-  const lowerQuery = query.toLowerCase();
-  const filteredCommands = commands.filter(
-    (cmd) =>
-      cmd.name.toLowerCase().includes(lowerQuery) ||
-      cmd.description.toLowerCase().includes(lowerQuery),
+  // Filter commands via fuzzysort when there's a query
+  const filteredCommands = useMemo(
+    () =>
+      query
+        ? fuzzysort
+            .go(query, commands, {
+              keys: ['name', 'description'],
+              scoreFn: (r) =>
+                Math.max(
+                  r[0]?.score ?? 0, // name (full weight)
+                  (r[1]?.score ?? 0) * 0.5, // description (reduced)
+                ),
+              threshold: 0.3,
+            })
+            .map((r) => r.obj)
+        : commands,
+    [query, commands],
   );
 
   // Calculate max command name length for padding
