@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { type ContainerStats, getContainerStats } from '../services/docker';
+import { log } from '../services/logger';
 
 /** Polling interval for container stats (1 second) */
 const STATS_POLL_INTERVAL = 1000;
@@ -28,10 +29,12 @@ export function useContainerStats(
 
   useEffect(() => {
     if (idsKey === '') {
+      log.debug('No running containers, skipping stats polling');
       setStats(new Map());
       return;
     }
 
+    log.debug({ idsKey }, 'Starting container stats polling');
     let cancelled = false;
 
     const fetchStats = async () => {
@@ -40,6 +43,10 @@ export function useContainerStats(
       if (ids.length === 0) return;
       const result = await getContainerStats(ids);
       if (!cancelled) {
+        log.debug(
+          { statsCount: result.size, containerCount: ids.length },
+          'Container stats update',
+        );
         setStats(result);
       }
     };
@@ -49,6 +56,7 @@ export function useContainerStats(
     const interval = setInterval(fetchStats, STATS_POLL_INTERVAL);
 
     return () => {
+      log.debug('Stopping container stats polling');
       cancelled = true;
       clearInterval(interval);
     };

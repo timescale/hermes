@@ -828,11 +828,28 @@ export async function getContainerStats(
   if (containerIds.length === 0) return result;
 
   try {
+    const format = '{{json .}}';
     const output =
-      await $`docker stats --no-stream --format {{json .}} ${containerIds}`
+      await $`docker stats --no-stream --format ${format} ${containerIds}`
         .quiet()
         .nothrow();
-    const lines = output.stdout.toString().trim().split('\n').filter(Boolean);
+    const stdout = output.stdout.toString().trim();
+    const stderr = output.stderr.toString().trim();
+
+    if (output.exitCode !== 0) {
+      log.warn(
+        { exitCode: output.exitCode, stderr },
+        'docker stats exited with non-zero code',
+      );
+      return result;
+    }
+
+    log.debug(
+      { containerCount: containerIds.length },
+      'Fetched container stats',
+    );
+
+    const lines = stdout.split('\n').filter(Boolean);
 
     for (const line of lines) {
       try {
@@ -844,12 +861,12 @@ export async function getContainerStats(
           memUsage: data.MemUsage,
           memPercent: Number.parseFloat(data.MemPerc.replace('%', '')) || 0,
         });
-      } catch {
-        // Skip malformed lines
+      } catch (err) {
+        log.warn({ line, err }, 'Failed to parse docker stats line');
       }
     }
-  } catch {
-    // Stats are best-effort; return empty map on failure
+  } catch (err) {
+    log.warn({ err }, 'Failed to fetch container stats');
   }
 
   return result;
