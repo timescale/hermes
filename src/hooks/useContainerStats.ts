@@ -43,7 +43,7 @@ export function useContainerStats(
       if (ids.length === 0) return;
       const result = await getContainerStats(ids);
       if (!cancelled) {
-        log.debug(
+        log.trace(
           { statsCount: result.size, containerCount: ids.length },
           'Container stats update',
         );

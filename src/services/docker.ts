@@ -844,7 +844,7 @@ export async function getContainerStats(
       return result;
     }
 
-    log.debug(
+    log.trace(
       { containerCount: containerIds.length },
       'Fetched container stats',
     );
