@@ -441,7 +441,7 @@ export function SessionDetail({
               }
               wrapMode="none"
             >
-              #{prInfo.number} {prInfo.state.toLowerCase()}
+              {`#${prInfo.number} ${prInfo.state.toLowerCase()}`}
             </text>
           </box>
         )}

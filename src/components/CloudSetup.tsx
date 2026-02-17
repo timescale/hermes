@@ -334,9 +334,9 @@ export function CloudSetup({
 
         <text fg={theme.textMuted} marginTop={1}>
           Get a token at:{' '}
-          <text fg={theme.primary}>
+          <span fg={theme.primary}>
             https://dash.deno.com/account#access-tokens
-          </text>
+          </span>
         </text>
 
         <box marginTop={2} flexDirection="column">
