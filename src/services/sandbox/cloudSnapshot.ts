@@ -8,6 +8,19 @@ import packageJson from '../../../package.json' with { type: 'json' };
 import { log } from '../logger.ts';
 import { DenoApiClient } from './denoApi.ts';
 
+/**
+ * Await a sandbox command and log errors with context on failure.
+ * Re-throws the original error after logging.
+ */
+async function run(cmd: PromiseLike<unknown>, step: string): Promise<void> {
+  try {
+    await cmd;
+  } catch (err) {
+    log.error({ err, step }, 'Snapshot build step failed');
+    throw err;
+  }
+}
+
 export type SnapshotBuildProgress =
   | { type: 'checking' }
   | { type: 'exists'; snapshotSlug: string }
@@ -91,14 +104,20 @@ export async function ensureCloudSnapshot(options: {
       message: 'Installing system packages',
       detail: 'git, curl, ca-certificates, zip, unzip, tar, gzip, jq',
     });
-    await sandbox.sh`apt-get update && apt-get install -y git curl ca-certificates zip unzip tar gzip jq openssh-client`.sudo();
+    await run(
+      sandbox.sh`apt-get update && apt-get install -y git curl ca-certificates zip unzip tar gzip jq openssh-client`.sudo(),
+      'Install system packages',
+    );
 
     // 5. Install GitHub CLI (root)
     onProgress?.({
       type: 'installing',
       message: 'Installing GitHub CLI',
     });
-    await sandbox.sh`curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && apt-get update && apt-get install -y gh`.sudo();
+    await run(
+      sandbox.sh`curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && apt-get update && apt-get install -y gh`.sudo(),
+      'Install GitHub CLI',
+    );
 
     // 6. Install Claude Code (default user)
     onProgress?.({
@@ -106,28 +125,40 @@ export async function ensureCloudSnapshot(options: {
       message: 'Installing Claude Code',
       detail: 'This may take a minute',
     });
-    await sandbox.sh`curl -fsSL https://claude.ai/install.sh | bash`;
+    await run(
+      sandbox.sh`curl -fsSL https://claude.ai/install.sh | bash`,
+      'Install Claude Code',
+    );
 
     // 7. Install Tiger CLI (default user)
     onProgress?.({
       type: 'installing',
       message: 'Installing Tiger CLI',
     });
-    await sandbox.sh`curl -fsSL https://cli.tigerdata.com | sh`;
+    await run(
+      sandbox.sh`curl -fsSL https://cli.tigerdata.com | sh`,
+      'Install Tiger CLI',
+    );
 
     // 8. Install OpenCode (default user, using ~ for home)
     onProgress?.({
       type: 'installing',
       message: 'Installing OpenCode',
     });
-    await sandbox.sh`curl -fsSL https://opencode.ai/install | bash && mkdir -p ~/.opencode/bin && ln -sf ~/.local/bin/opencode ~/.opencode/bin/opencode`;
+    await run(
+      sandbox.sh`curl -fsSL https://opencode.ai/install | bash && mkdir -p ~/.opencode/bin && ln -sf ~/.local/bin/opencode ~/.opencode/bin/opencode`,
+      'Install OpenCode',
+    );
 
     // 9. Configure git (default user)
     onProgress?.({
       type: 'installing',
       message: 'Configuring git',
     });
-    await sandbox.sh`git config --global user.email "hermes@tigerdata.com" && git config --global user.name "Hermes Agent"`;
+    await run(
+      sandbox.sh`git config --global user.email "hermes@tigerdata.com" && git config --global user.name "Hermes Agent"`,
+      'Configure git',
+    );
 
     // 10. Snapshot the volume
     onProgress?.({

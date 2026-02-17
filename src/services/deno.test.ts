@@ -1,10 +1,34 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { deleteDenoToken, getDenoToken, setDenoToken } from './deno';
 
-describe.skipIf(!!process.env.CI)('deno token management', () => {
+// Mock the keyring module so tests never touch the real OS keyring.
+// This prevents `./bun test` from wiping out the user's actual Deno token.
+const mockStore = new Map<string, string>();
+mock.module('./keyring', () => ({
+  getHermesSecret: async (key: string) => mockStore.get(key) ?? null,
+  setHermesSecret: async (key: string, value: string) => {
+    mockStore.set(key, value);
+  },
+  deleteHermesSecret: async (key: string) => {
+    mockStore.delete(key);
+  },
+  // Keep other exports available in case they're needed
+  getSecret: async () => null,
+  setSecret: async () => {},
+  deleteSecret: async () => {},
+}));
+
+describe('deno token management', () => {
+  beforeAll(() => {
+    mockStore.clear();
+  });
+
+  afterAll(() => {
+    mockStore.clear();
+  });
+
   test('getDenoToken returns null when no token is stored', async () => {
-    // Clean up first
-    await deleteDenoToken();
+    mockStore.clear();
     const token = await getDenoToken();
     expect(token).toBeNull();
   });
