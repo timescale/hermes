@@ -137,9 +137,18 @@ export class DenoApiClient {
   }
 
   async getSnapshot(idOrSlug: string): Promise<DenoSnapshot | null> {
-    const snap = await this.client.snapshots.get(idOrSlug);
-    if (!snap) return null;
-    return { id: snap.id, slug: snap.slug, region: snap.region };
+    // Try direct lookup first (works for proper IDs like snp_ord_...)
+    try {
+      const snap = await this.client.snapshots.get(idOrSlug);
+      if (snap) return { id: snap.id, slug: snap.slug, region: snap.region };
+    } catch {
+      // Fall through to search by slug
+    }
+    // Search by slug for human-readable names
+    const result = await this.client.snapshots.list({ search: idOrSlug });
+    const match = result.items.find((s) => s.slug === idOrSlug);
+    if (!match) return null;
+    return { id: match.id, slug: match.slug, region: match.region };
   }
 
   async deleteSnapshot(idOrSlug: string): Promise<void> {
