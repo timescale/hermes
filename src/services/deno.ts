@@ -1,0 +1,77 @@
+// ============================================================================
+// Deno Deploy Token Management
+// ============================================================================
+
+import {
+  deleteHermesSecret,
+  getHermesSecret,
+  setHermesSecret,
+} from './keyring';
+import { log } from './logger';
+
+const DENO_TOKEN_KEY = 'deno-deploy-token';
+
+/**
+ * Read the Deno Deploy token from the OS keyring.
+ * Returns null if no token is stored.
+ */
+export async function getDenoToken(): Promise<string | null> {
+  return getHermesSecret(DENO_TOKEN_KEY);
+}
+
+/**
+ * Store a Deno Deploy token in the OS keyring.
+ */
+export async function setDenoToken(token: string): Promise<void> {
+  await setHermesSecret(DENO_TOKEN_KEY, token);
+  log.debug('Stored Deno Deploy token in keyring');
+}
+
+/**
+ * Remove the Deno Deploy token from the OS keyring.
+ */
+export async function deleteDenoToken(): Promise<void> {
+  await deleteHermesSecret(DENO_TOKEN_KEY);
+  log.debug('Deleted Deno Deploy token from keyring');
+}
+
+/**
+ * Validate a Deno Deploy token by attempting an API call.
+ * Uses the REST API directly to avoid SDK dependency issues.
+ * Returns true if the token is valid.
+ */
+export async function validateDenoToken(token: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://api.deno.com/v1/organizations', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    return response.ok;
+  } catch (err) {
+    log.debug({ err }, 'Failed to validate Deno Deploy token');
+    return false;
+  }
+}
+
+/**
+ * Ensure a valid Deno Deploy token is available.
+ * Returns the token if found and valid, null otherwise.
+ * Does NOT prompt -- callers should handle the missing token case
+ * (e.g., by showing the CloudSetup TUI).
+ */
+export async function ensureDenoToken(): Promise<string | null> {
+  const token = await getDenoToken();
+  if (!token) {
+    log.debug('No Deno Deploy token found in keyring');
+    return null;
+  }
+
+  const valid = await validateDenoToken(token);
+  if (!valid) {
+    log.warn('Deno Deploy token in keyring is invalid or expired');
+    return null;
+  }
+
+  return token;
+}

@@ -2,6 +2,7 @@
 // Sandbox Provider - Factory and re-exports
 // ============================================================================
 
+export { CloudSandboxProvider } from './cloudProvider.ts';
 export { DockerSandboxProvider } from './dockerProvider.ts';
 export type {
   CreateSandboxOptions,
@@ -17,6 +18,7 @@ export type {
 } from './types.ts';
 
 import { readConfig } from '../config.ts';
+import { CloudSandboxProvider } from './cloudProvider.ts';
 import { DockerSandboxProvider } from './dockerProvider.ts';
 import type {
   HermesSession,
@@ -26,17 +28,13 @@ import type {
 
 /**
  * Get a sandbox provider instance by type.
- * Currently only 'docker' is implemented; 'cloud' will be added in Phase 5.
  */
 export function getSandboxProvider(type: SandboxProviderType): SandboxProvider {
   switch (type) {
     case 'docker':
       return new DockerSandboxProvider();
     case 'cloud':
-      // TODO: Phase 5 - return new CloudSandboxProvider()
-      throw new Error(
-        'Cloud sandbox provider is not yet implemented. Use sandboxProvider: "docker" in your config.',
-      );
+      return new CloudSandboxProvider();
   }
 }
 
