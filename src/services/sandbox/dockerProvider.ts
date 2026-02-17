@@ -1,0 +1,197 @@
+// ============================================================================
+// Docker Sandbox Provider - Adapts existing Docker functions to SandboxProvider
+// ============================================================================
+
+import {
+  attachToContainer,
+  type HermesSession as DockerSession,
+  getSession as dockerGetSession,
+  ensureDockerImage,
+  ensureDockerSandbox,
+  getContainerLogs,
+  getContainerStats,
+  listHermesSessions,
+  removeContainer,
+  resumeSession,
+  shellInContainer,
+  startContainer,
+  startShellContainer,
+  stopContainer,
+  streamContainerLogs,
+} from '../docker.ts';
+import type {
+  CreateSandboxOptions,
+  CreateShellSandboxOptions,
+  HermesSession,
+  LogStream,
+  ResumeSandboxOptions,
+  SandboxBuildProgress,
+  SandboxProvider,
+  SandboxStats,
+} from './types.ts';
+
+// ============================================================================
+// Session Mapping
+// ============================================================================
+
+/**
+ * Map a Docker HermesSession to the unified HermesSession type.
+ * Status mapping: 'running' -> 'running', 'exited' -> 'exited',
+ * all others ('paused', 'restarting', 'dead', 'created') -> 'stopped'.
+ */
+function mapDockerSession(docker: DockerSession): HermesSession {
+  let status: HermesSession['status'];
+  switch (docker.status) {
+    case 'running':
+      status = 'running';
+      break;
+    case 'exited':
+      status = 'exited';
+      break;
+    default:
+      status = 'stopped';
+      break;
+  }
+
+  return {
+    id: docker.containerId,
+    name: docker.name,
+    provider: 'docker',
+    status,
+    exitCode: docker.exitCode,
+    agent: docker.agent,
+    model: docker.model,
+    prompt: docker.prompt,
+    branch: docker.branch,
+    repo: docker.repo,
+    created: docker.created,
+    interactive: docker.interactive,
+    execType: docker.execType,
+    resumedFrom: docker.resumedFrom,
+    mountDir: docker.mountDir,
+    containerName: docker.containerName,
+    startedAt: docker.startedAt,
+    finishedAt: docker.finishedAt,
+  };
+}
+
+/**
+ * Map Docker ContainerStats to the unified SandboxStats type.
+ */
+function mapDockerStats(
+  stats: Map<
+    string,
+    {
+      containerId: string;
+      cpuPercent: number;
+      memUsage: string;
+      memPercent: number;
+    }
+  >,
+): Map<string, SandboxStats> {
+  const result = new Map<string, SandboxStats>();
+  for (const [key, value] of stats) {
+    result.set(key, {
+      id: value.containerId,
+      cpuPercent: value.cpuPercent,
+      memUsage: value.memUsage,
+      memPercent: value.memPercent,
+    });
+  }
+  return result;
+}
+
+// ============================================================================
+// Docker Provider Implementation
+// ============================================================================
+
+export class DockerSandboxProvider implements SandboxProvider {
+  readonly type = 'docker' as const;
+
+  async ensureReady(): Promise<void> {
+    await ensureDockerSandbox();
+  }
+
+  async ensureImage(options?: {
+    onProgress?: (progress: SandboxBuildProgress) => void;
+  }): Promise<string> {
+    return ensureDockerImage({ onProgress: options?.onProgress });
+  }
+
+  async create(options: CreateSandboxOptions): Promise<HermesSession | null> {
+    const result = await startContainer({
+      branchName: options.branchName,
+      prompt: options.prompt,
+      repoInfo: options.repoInfo,
+      agent: options.agent,
+      model: options.model,
+      detach: options.detach,
+      interactive: options.interactive,
+      envVars: options.envVars,
+      mountDir: options.mountDir,
+      isGitRepo: options.isGitRepo,
+      agentArgs: options.agentArgs,
+    });
+
+    if (!result) return null;
+
+    // Fetch the full session info for the detached container
+    const containerName = `hermes-${options.branchName}`;
+    const session = await dockerGetSession(containerName);
+    return session ? mapDockerSession(session) : null;
+  }
+
+  async createShell(options: CreateShellSandboxOptions): Promise<void> {
+    await startShellContainer({
+      repoInfo: options.repoInfo,
+      mountDir: options.mountDir,
+      isGitRepo: options.isGitRepo,
+    });
+  }
+
+  async resume(
+    sessionId: string,
+    options: ResumeSandboxOptions,
+  ): Promise<string> {
+    return resumeSession(sessionId, options);
+  }
+
+  async list(): Promise<HermesSession[]> {
+    const sessions = await listHermesSessions();
+    return sessions.map(mapDockerSession);
+  }
+
+  async get(sessionId: string): Promise<HermesSession | null> {
+    const session = await dockerGetSession(sessionId);
+    return session ? mapDockerSession(session) : null;
+  }
+
+  async remove(sessionId: string): Promise<void> {
+    await removeContainer(sessionId);
+  }
+
+  async stop(sessionId: string): Promise<void> {
+    await stopContainer(sessionId);
+  }
+
+  async attach(sessionId: string): Promise<void> {
+    await attachToContainer(sessionId);
+  }
+
+  async shell(sessionId: string): Promise<void> {
+    await shellInContainer(sessionId);
+  }
+
+  async getLogs(sessionId: string, tail?: number): Promise<string> {
+    return getContainerLogs(sessionId, tail);
+  }
+
+  streamLogs(sessionId: string): LogStream {
+    return streamContainerLogs(sessionId);
+  }
+
+  async getStats(sessionIds: string[]): Promise<Map<string, SandboxStats>> {
+    const stats = await getContainerStats(sessionIds);
+    return mapDockerStats(stats);
+  }
+}
