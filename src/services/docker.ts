@@ -30,6 +30,7 @@ import {
   readConfig,
   userConfigDir,
 } from './config';
+import { CONTAINER_HOME } from './dockerFiles';
 import { getGhConfigFiles } from './gh';
 import type { RepoInfo } from './git';
 import { log } from './logger';
@@ -48,13 +49,23 @@ function base64Encode(text: string): string {
 export const toVolumeArgs = (volumes: string[]): string[] =>
   volumes.flatMap((v) => ['-v', v]);
 
-export const getCredentialFiles = async (): Promise<VirtualFile[]> => {
+export const getCredentialFiles = async (
+  homeDir = CONTAINER_HOME,
+): Promise<VirtualFile[]> => {
   const [claudeFiles, opencodeFiles, ghFiles] = await Promise.all([
     getClaudeConfigFiles(),
     getOpencodeConfigFiles(),
     getGhConfigFiles(),
   ]);
-  return [...claudeFiles, ...opencodeFiles, ...ghFiles];
+  const files = [...claudeFiles, ...opencodeFiles, ...ghFiles];
+  // Rewrite paths if a different home directory was requested
+  if (homeDir !== CONTAINER_HOME) {
+    return files.map((f) => ({
+      ...f,
+      path: f.path.replace(CONTAINER_HOME, homeDir),
+    }));
+  }
+  return files;
 };
 
 // ============================================================================

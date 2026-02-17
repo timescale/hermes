@@ -24,49 +24,15 @@ function getBaseSnapshotSlug(): string {
 }
 
 /**
- * Run a shell command in a sandbox and wait for it to finish.
- * Throws if the command exits with a non-zero status.
- *
- * Uses `sandbox.spawn(...)` instead of `sandbox.sh` because `sh` is a
- * tagged template literal that shell-escapes interpolated values, which
- * would break compound commands containing `|`, `&&`, `>`, etc.
- *
- * The Deno sandbox default user is NOT root, so we use `sudo` to run
- * commands as root (the default) or `sudo su - {user}` to run as a
- * specific user.
- */
-async function sh(
-  sandbox: Sandbox,
-  command: string,
-  options?: { user?: string },
-): Promise<void> {
-  const args = options?.user
-    ? ['-c', `su - ${options.user} -c ${JSON.stringify(command)}`]
-    : ['-c', command];
-  const proc = await sandbox.spawn('sudo', {
-    args: ['bash', ...args],
-    stdout: 'piped',
-    stderr: 'piped',
-  });
-  const result = await proc.output();
-  if (!result.status.success) {
-    const stderr = result.stderrText ?? '';
-    log.warn(
-      { command, exitCode: result.status.code, stderr },
-      'Sandbox command failed',
-    );
-    throw new Error(
-      `Command failed (exit ${result.status.code}): ${stderr.slice(0, 200)}`,
-    );
-  }
-}
-
-/**
  * Ensure the base cloud snapshot exists for the current hermes version.
  * Creates it if it doesn't exist by:
  * 1. Booting a sandbox from builtin:debian-13
  * 2. Installing all required tools
  * 3. Snapshotting the volume
+ *
+ * Uses the SDK's `sandbox.sh` tagged template for all commands.
+ * Root commands use `.sudo()`. User-level commands (tool installs)
+ * run as the default sandbox user so tools end up in `$HOME`.
  */
 export async function ensureCloudSnapshot(options: {
   token: string;
@@ -119,90 +85,51 @@ export async function ensureCloudSnapshot(options: {
       memory: '2GiB',
     });
 
-    // 4. Install system packages
+    // 4. Install system packages (root)
     onProgress?.({
       type: 'installing',
       message: 'Installing system packages',
       detail: 'git, curl, ca-certificates, zip, unzip, tar, gzip, jq',
     });
-    await sh(
-      sandbox,
-      'apt-get update && apt-get install -y git curl ca-certificates zip unzip tar gzip jq openssh-client',
-    );
+    await sandbox.sh`apt-get update && apt-get install -y git curl ca-certificates zip unzip tar gzip jq openssh-client`.sudo();
 
-    // 5. Install GitHub CLI
+    // 5. Install GitHub CLI (root)
     onProgress?.({
       type: 'installing',
       message: 'Installing GitHub CLI',
     });
-    await sh(
-      sandbox,
-      [
-        'curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg',
-        'chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg',
-        'echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null',
-        'apt-get update && apt-get install -y gh',
-      ].join(' && '),
-    );
+    await sandbox.sh`curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && apt-get update && apt-get install -y gh`.sudo();
 
-    // 6. Create hermes user
-    onProgress?.({
-      type: 'installing',
-      message: 'Creating hermes user',
-    });
-    await sh(
-      sandbox,
-      [
-        'groupadd -g 10000 hermes',
-        'useradd -u 10000 -g hermes -m -s /bin/bash hermes',
-        'mkdir -p /home/hermes/.local/bin /home/hermes/.local/share/opencode /home/hermes/.cache /home/hermes/.config/gh /home/hermes/.claude',
-        'chown -R hermes:hermes /home/hermes',
-        'mkdir -p /work && chown hermes:hermes /work',
-      ].join(' && '),
-    );
-
-    // 7. Install Claude Code
+    // 6. Install Claude Code (default user)
     onProgress?.({
       type: 'installing',
       message: 'Installing Claude Code',
       detail: 'This may take a minute',
     });
-    await sh(sandbox, 'curl -fsSL https://claude.ai/install.sh | bash', {
-      user: 'hermes',
-    });
+    await sandbox.sh`curl -fsSL https://claude.ai/install.sh | bash`;
 
-    // 8. Install Tiger CLI
+    // 7. Install Tiger CLI (default user)
     onProgress?.({
       type: 'installing',
       message: 'Installing Tiger CLI',
     });
-    await sh(sandbox, 'curl -fsSL https://cli.tigerdata.com | sh', {
-      user: 'hermes',
-    });
+    await sandbox.sh`curl -fsSL https://cli.tigerdata.com | sh`;
 
-    // 9. Install OpenCode
+    // 8. Install OpenCode (default user, using ~ for home)
     onProgress?.({
       type: 'installing',
       message: 'Installing OpenCode',
     });
-    await sh(
-      sandbox,
-      'curl -fsSL https://opencode.ai/install | bash && mkdir -p /home/hermes/.opencode/bin && ln -sf /home/hermes/.local/bin/opencode /home/hermes/.opencode/bin/opencode',
-      { user: 'hermes' },
-    );
+    await sandbox.sh`curl -fsSL https://opencode.ai/install | bash && mkdir -p ~/.opencode/bin && ln -sf ~/.local/bin/opencode ~/.opencode/bin/opencode`;
 
-    // 10. Configure git
+    // 9. Configure git (default user)
     onProgress?.({
       type: 'installing',
       message: 'Configuring git',
     });
-    await sh(
-      sandbox,
-      'git config --global user.email "hermes@tigerdata.com" && git config --global user.name "Hermes Agent"',
-      { user: 'hermes' },
-    );
+    await sandbox.sh`git config --global user.email "hermes@tigerdata.com" && git config --global user.name "Hermes Agent"`;
 
-    // 11. Snapshot the volume
+    // 10. Snapshot the volume
     onProgress?.({
       type: 'snapshotting',
       message: 'Creating snapshot (this may take a moment)',
@@ -212,7 +139,7 @@ export async function ensureCloudSnapshot(options: {
     onProgress?.({ type: 'done', snapshotSlug });
     return snapshotSlug;
   } finally {
-    // 12. Cleanup: kill sandbox and delete build volume
+    // 11. Cleanup: kill sandbox and delete build volume
     onProgress?.({
       type: 'cleaning-up',
       message: 'Cleaning up build resources',

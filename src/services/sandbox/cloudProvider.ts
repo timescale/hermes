@@ -76,38 +76,17 @@ function buildAgentCommand(options: CreateSandboxOptions): string {
 // ============================================================================
 
 /**
- * Write all credential files (Claude, OpenCode, gh CLI) into a sandbox.
- *
- * Uses sudo + tee to write files as root since the sandbox default user
- * does not have write access to /home/hermes. After writing, ownership
- * is fixed to the hermes user.
+ * Write all credential files (Claude, OpenCode, gh CLI) into a sandbox
+ * using the SDK's filesystem API. Resolves the default user's $HOME first
+ * so paths are correct for the sandbox environment.
  */
 async function injectCredentials(sandbox: Sandbox): Promise<void> {
-  const credFiles = await getCredentialFiles();
+  const home = (await sandbox.sh`echo $HOME`.text()).trim();
+  const credFiles = await getCredentialFiles(home);
   for (const file of credFiles) {
     const dir = file.path.substring(0, file.path.lastIndexOf('/'));
-    // Base64-encode to safely pass arbitrary content through the shell
-    const b64 = Buffer.from(file.value).toString('base64');
-    const proc = await sandbox.spawn('sudo', {
-      args: [
-        'bash',
-        '-c',
-        `mkdir -p ${dir} && echo '${b64}' | base64 -d > ${file.path} && chown hermes:hermes ${file.path}`,
-      ],
-      stdout: 'piped',
-      stderr: 'piped',
-    });
-    const result = await proc.output();
-    if (!result.status.success) {
-      log.warn(
-        {
-          path: file.path,
-          exitCode: result.status.code,
-          stderr: result.stderrText ?? '',
-        },
-        'Failed to inject credential file',
-      );
-    }
+    await sandbox.fs.mkdir(dir, { recursive: true });
+    await sandbox.fs.writeTextFile(file.path, file.value);
   }
 }
 
@@ -129,26 +108,15 @@ async function sshIntoSandbox(sandbox: Sandbox): Promise<void> {
 }
 
 /**
- * Run a shell command in a sandbox as a given user (or root).
+ * Run a dynamic shell command string in the sandbox using spawn().
  *
- * Uses `sandbox.spawn(...)` instead of `sandbox.sh` because `sh` is a
- * tagged template literal that shell-escapes interpolated values, which
- * would break compound commands containing `|`, `&&`, `>`, etc.
- *
- * The Deno sandbox default user is NOT root, so we use `sudo` to run
- * commands as root (the default) or `sudo su - {user}` to run as a
- * specific user.
+ * Only use this for commands that interpolate values containing shell syntax
+ * (pipes, redirects, &&, &). For static or safely-interpolated commands,
+ * prefer `sandbox.sh` tagged templates instead.
  */
-async function sh(
-  sandbox: Sandbox,
-  command: string,
-  options?: { user?: string },
-): Promise<void> {
-  const args = options?.user
-    ? ['-c', `su - ${options.user} -c ${JSON.stringify(command)}`]
-    : ['-c', command];
-  const proc = await sandbox.spawn('sudo', {
-    args: ['bash', ...args],
+async function spawnShell(sandbox: Sandbox, command: string): Promise<void> {
+  const proc = await sandbox.spawn('bash', {
+    args: ['-c', command],
     stdout: 'piped',
     stderr: 'piped',
   });
@@ -332,20 +300,16 @@ export class CloudSandboxProvider implements SandboxProvider {
 
       // 5. Clone repo and create branch
       if (options.repoInfo && options.isGitRepo !== false) {
-        await sh(
-          sandbox,
-          `cd /work && gh auth setup-git && gh repo clone ${options.repoInfo.fullName} app && cd app && git switch -c "hermes/${options.branchName}"`,
-          { user: 'hermes' },
-        );
+        const fullName = options.repoInfo.fullName;
+        const branchRef = `hermes/${options.branchName}`;
+        await sandbox.sh`cd /work && gh auth setup-git && gh repo clone ${fullName} app && cd app && git switch -c ${branchRef}`;
       } else {
-        await sh(sandbox, 'mkdir -p /work/app');
+        await sandbox.sh`mkdir -p /work/app`;
       }
 
-      // 6. Run init script if configured
+      // 6. Run init script if configured (dynamic — may contain shell syntax)
       if (options.initScript) {
-        await sh(sandbox, `cd /work/app && ${options.initScript}`, {
-          user: 'hermes',
-        });
+        await spawnShell(sandbox, `cd /work/app && ${options.initScript}`);
       }
 
       // 7. Start agent process
@@ -354,11 +318,10 @@ export class CloudSandboxProvider implements SandboxProvider {
         // Interactive mode: SSH into sandbox
         await sshIntoSandbox(sandbox);
       } else {
-        // Detached mode: start agent in background
-        await sh(
+        // Detached mode: start agent in background (dynamic — contains pipes/redirects)
+        await spawnShell(
           sandbox,
           `cd /work/app && nohup ${agentCommand} > /work/agent.log 2>&1 &`,
-          { user: 'hermes' },
         );
       }
     } finally {
@@ -408,11 +371,8 @@ export class CloudSandboxProvider implements SandboxProvider {
 
       // Clone repo if available
       if (options.repoInfo && options.isGitRepo !== false) {
-        await sh(
-          sandbox,
-          `cd /work && gh auth setup-git && gh repo clone ${options.repoInfo.fullName} app`,
-          { user: 'hermes' },
-        );
+        const fullName = options.repoInfo.fullName;
+        await sandbox.sh`cd /work && gh auth setup-git && gh repo clone ${fullName} app`;
       }
 
       // SSH into the sandbox
@@ -529,10 +489,10 @@ export class CloudSandboxProvider implements SandboxProvider {
           agentCmd = `echo '${b64}' | base64 -d | ${agentCmd}`;
         }
 
-        await sh(
+        // Dynamic command — contains pipes/redirects
+        await spawnShell(
           sandbox,
           `cd /work/app && nohup ${agentCmd} > /work/agent.log 2>&1 &`,
-          { user: 'hermes' },
         );
       }
     } finally {
