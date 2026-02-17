@@ -24,19 +24,6 @@ import {
   readConfig,
 } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
-import {
-  attachToContainer,
-  ensureDockerImage,
-  ensureDockerSandbox,
-  getSession,
-  type HermesSession,
-  listHermesSessions,
-  removeContainer,
-  resumeSession,
-  shellInContainer,
-  startContainer,
-  startShellContainer,
-} from '../services/docker';
 import { checkGhCredentials } from '../services/gh.ts';
 import {
   generateBranchName,
@@ -49,6 +36,11 @@ import {
   checkOpencodeCredentials,
   ensureOpencodeAuth,
 } from '../services/opencode';
+import {
+  getDefaultProvider,
+  type HermesSession,
+  type SandboxProvider,
+} from '../services/sandbox';
 import { createTui } from '../services/tui.ts';
 import {
   checkForUpdate,
@@ -97,7 +89,7 @@ interface SessionsResult {
     | 'start-interactive'
     | 'shell'
     | 'needs-agent-auth';
-  containerId?: string;
+  sessionId?: string;
   // For attach/exec-shell: the session to return to after detaching
   session?: HermesSession;
   // For resume: optional model override
@@ -106,8 +98,8 @@ interface SessionsResult {
   resumeMountDir?: string;
   // For resume: agent args (e.g., plan mode flags)
   resumeAgentArgs?: string[];
-  // For shell: container ID if resuming, undefined if fresh shell
-  resumeContainerId?: string;
+  // For shell: session ID if resuming, undefined if fresh shell
+  resumeSessionId?: string;
   // For shell: optional mount directory for fresh shell
   shellMountDir?: string;
   // For shell: whether running from a git repo
@@ -165,6 +157,7 @@ interface SessionsAppProps {
   initialModel?: string;
   /** Session to display when initialView is 'detail' */
   initialSession?: HermesSession;
+  provider: SandboxProvider;
   serviceId?: string;
   dbFork?: boolean;
   /** Mount local directory instead of git clone */
@@ -182,6 +175,7 @@ function SessionsApp({
   initialAgent,
   initialModel,
   initialSession,
+  provider,
   serviceId,
   dbFork = true,
   initialMountDir,
@@ -280,7 +274,7 @@ function SessionsApp({
           step: 'Preparing sandbox environment',
           mode,
         });
-        await ensureDockerImage({
+        await provider.ensureImage({
           onProgress: (progress) => {
             if (progress.type === 'pulling-cache') {
               setView((v) =>
@@ -412,8 +406,9 @@ function SessionsApp({
               }
             : v,
         );
-        await startContainer({
+        const session = await provider.create({
           branchName,
+          name: branchName,
           prompt,
           repoInfo,
           agent,
@@ -424,11 +419,6 @@ function SessionsApp({
           mountDir,
           isGitRepo: inGitRepo,
         });
-
-        setView((v) =>
-          v.type === 'starting' ? { ...v, step: 'Loading session' } : v,
-        );
-        const session = await getSession(`hermes-${branchName}`);
 
         if (session) {
           setView({ type: 'detail', session });
@@ -444,7 +434,7 @@ function SessionsApp({
         setView({ type: 'prompt' });
       }
     },
-    [showToast, onComplete],
+    [showToast, onComplete, provider],
   );
 
   // Resume session function - handles the full flow of resuming an agent
@@ -489,7 +479,7 @@ function SessionsApp({
 
           onComplete({
             type: 'resume',
-            containerId: session.containerId,
+            sessionId: session.id,
             resumeModel: model,
             resumeMountDir: mountDir,
             resumeAgentArgs: agentArgs,
@@ -513,7 +503,7 @@ function SessionsApp({
             : v,
         );
 
-        const newContainerId = await resumeSession(session.containerId, {
+        const newId = await provider.resume(session.id, {
           mode: 'detached',
           prompt,
           model,
@@ -525,7 +515,7 @@ function SessionsApp({
         );
 
         // Fetch the newly created session and show its detail
-        const newSession = await getSession(newContainerId);
+        const newSession = await provider.get(newId);
         if (newSession) {
           setView({ type: 'detail', session: newSession });
         } else {
@@ -540,7 +530,7 @@ function SessionsApp({
         setView({ type: 'prompt', resumeSession: session });
       }
     },
-    [showToast, onComplete],
+    [showToast, onComplete, provider],
   );
 
   // Handle docker setup completion
@@ -725,7 +715,7 @@ function SessionsApp({
               // Shell on resumed container
               onComplete({
                 type: 'shell',
-                resumeContainerId: resumeSess.containerId,
+                resumeSessionId: resumeSess.id,
               });
             } else {
               // Fresh shell container
@@ -777,18 +767,19 @@ function SessionsApp({
       <>
         <SessionDetail
           session={view.session}
+          provider={provider}
           onBack={() => setView({ type: 'list' })}
-          onAttach={(containerId) =>
+          onAttach={(sessionId) =>
             onComplete({
               type: 'attach',
-              containerId,
+              sessionId,
               session: view.session,
             })
           }
-          onShell={(containerId) =>
+          onShell={(sessionId) =>
             onComplete({
               type: 'exec-shell',
-              containerId,
+              sessionId,
               session: view.session,
             })
           }
@@ -812,20 +803,21 @@ function SessionsApp({
   return (
     <>
       <SessionsList
+        provider={provider}
         onSelect={(session) => setView({ type: 'detail', session })}
         onQuit={() => onComplete({ type: 'quit' })}
         onNewTask={() => setView({ type: 'prompt' })}
         onAttach={(session) =>
           onComplete({
             type: 'attach',
-            containerId: session.containerId,
+            sessionId: session.id,
             session,
           })
         }
         onShell={(session) =>
           onComplete({
             type: 'exec-shell',
-            containerId: session.containerId,
+            sessionId: session.id,
             session,
           })
         }
@@ -858,7 +850,8 @@ export async function runSessionsTui({
   mountDir,
   isGitRepo,
 }: RunSessionsTuiOptions = {}): Promise<void> {
-  await ensureDockerSandbox();
+  const provider = await getDefaultProvider();
+  await provider.ensureReady();
 
   // Try to detect current repo (returns null if not in a git repo)
   const currentRepoInfo = await tryGetRepoInfo();
@@ -896,6 +889,7 @@ export async function runSessionsTui({
           initialAgent={nextAgent}
           initialModel={nextModel}
           initialSession={nextSession}
+          provider={provider}
           serviceId={serviceId}
           dbFork={dbFork}
           initialMountDir={nextMountDir}
@@ -925,8 +919,8 @@ export async function runSessionsTui({
     }
 
     // Handle attach action - needs to happen after TUI cleanup
-    if (result.type === 'attach' && result.containerId) {
-      await attachToContainer(result.containerId);
+    if (result.type === 'attach' && result.sessionId) {
+      await provider.attach(result.sessionId);
       // Return to the session detail view after detaching
       if (result.session) {
         nextView = 'detail';
@@ -936,8 +930,8 @@ export async function runSessionsTui({
     }
 
     // Handle exec-shell action - open a bash shell in a running container
-    if (result.type === 'exec-shell' && result.containerId) {
-      await shellInContainer(result.containerId);
+    if (result.type === 'exec-shell' && result.sessionId) {
+      await provider.shell(result.sessionId);
       // Return to the session detail view after exiting the shell
       if (result.session) {
         nextView = 'detail';
@@ -946,10 +940,10 @@ export async function runSessionsTui({
       continue;
     }
 
-    if (result.type === 'resume' && result.containerId) {
+    if (result.type === 'resume' && result.sessionId) {
       enterSubprocessScreen();
       try {
-        await resumeSession(result.containerId, {
+        await provider.resume(result.sessionId, {
           mode: 'interactive',
           model: result.resumeModel,
           mountDir: result.resumeMountDir,
@@ -967,15 +961,15 @@ export async function runSessionsTui({
     if (result.type === 'shell') {
       enterSubprocessScreen();
       try {
-        if (result.resumeContainerId) {
+        if (result.resumeSessionId) {
           // Shell on resumed container
-          await resumeSession(result.resumeContainerId, { mode: 'shell' });
+          await provider.resume(result.resumeSessionId, { mode: 'shell' });
         } else {
           // Fresh shell container
           const shellRepoInfo = result.shellIsGitRepo
             ? await getRepoInfo()
             : null;
-          await startShellContainer({
+          await provider.createShell({
             repoInfo: shellRepoInfo,
             mountDir: result.shellMountDir,
             isGitRepo: result.shellIsGitRepo,
@@ -1004,8 +998,9 @@ export async function runSessionsTui({
       enterSubprocessScreen();
       try {
         const startRepoInfo = startIsGitRepo ? await getRepoInfo() : null;
-        await startContainer({
+        await provider.create({
           branchName,
+          name: branchName,
           prompt,
           repoInfo: startRepoInfo,
           agent,
@@ -1097,14 +1092,10 @@ export function getStatusDisplay(session: HermesSession): string {
         return '\x1b[34mcomplete\x1b[0m'; // blue
       }
       return `\x1b[31mfailed (${session.exitCode})\x1b[0m`; // red
-    case 'paused':
-      return '\x1b[33mpaused\x1b[0m'; // yellow
-    case 'restarting':
-      return '\x1b[33mrestarting\x1b[0m'; // yellow
-    case 'dead':
-      return '\x1b[31mdead\x1b[0m'; // red
-    case 'created':
-      return '\x1b[36mcreated\x1b[0m'; // cyan
+    case 'stopped':
+      return '\x1b[33mstopped\x1b[0m'; // yellow
+    case 'unknown':
+      return '\x1b[90munknown\x1b[0m'; // gray
     default:
       return session.status;
   }
@@ -1174,7 +1165,8 @@ async function sessionsAction(options: SessionsOptions): Promise<void> {
   }
 
   // CLI output modes
-  const sessions = await listHermesSessions();
+  const provider = await getDefaultProvider();
+  const sessions = await provider.list();
 
   // Filter to only running sessions unless --all is specified
   const filteredSessions = options.all
@@ -1245,7 +1237,8 @@ const cleanCommand = new Command('clean')
   .option('-a, --all', 'Remove all containers (including running)')
   .option('-f, --force', 'Skip confirmation')
   .action(async (options: { all: boolean; force: boolean }) => {
-    const sessions = await listHermesSessions();
+    const provider = await getDefaultProvider();
+    const sessions = await provider.list();
 
     const toRemove = options.all
       ? sessions
@@ -1256,9 +1249,11 @@ const cleanCommand = new Command('clean')
       return;
     }
 
+    const displayName = (s: HermesSession) => s.containerName ?? s.id;
+
     console.log(`Found ${toRemove.length} container(s) to remove:`);
     for (const session of toRemove) {
-      console.log(`  - ${session.containerName} (${session.status})`);
+      console.log(`  - ${displayName(session)} (${session.status})`);
     }
 
     if (!options.force) {
@@ -1281,12 +1276,13 @@ const cleanCommand = new Command('clean')
 
     console.log('');
     for (const session of toRemove) {
+      const name = displayName(session);
       try {
-        await removeContainer(session.containerName);
-        console.log(`Removed ${session.containerName}`);
+        await provider.remove(session.id);
+        console.log(`Removed ${name}`);
       } catch (err) {
-        log.error({ err }, `Failed to remove ${session.containerName}`);
-        console.error(`Failed to remove ${session.containerName}: ${err}`);
+        log.error({ err }, `Failed to remove ${name}`);
+        console.error(`Failed to remove ${name}: ${err}`);
       }
     }
   });

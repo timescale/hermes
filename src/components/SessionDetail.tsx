@@ -5,16 +5,10 @@ import { useContainerStats } from '../hooks/useContainerStats';
 import { useWindowSize } from '../hooks/useWindowSize';
 import { copyToClipboard } from '../services/clipboard';
 import { useCommandStore, useRegisterCommands } from '../services/commands.tsx';
-import {
-  formatCpuPercent,
-  formatMemUsage,
-  getSession,
-  type HermesSession,
-  removeContainer,
-  stopContainer,
-} from '../services/docker';
+import { formatCpuPercent, formatMemUsage } from '../services/docker';
 import { getPrForBranch, type PrInfo } from '../services/github';
 import { log } from '../services/logger';
+import type { HermesSession, SandboxProvider } from '../services/sandbox';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
 import { formatShellError, type ShellError } from '../utils';
@@ -29,9 +23,10 @@ const PR_CACHE_TTL = 60_000;
 
 export interface SessionDetailProps {
   session: HermesSession;
+  provider: SandboxProvider;
   onBack: () => void;
-  onAttach: (containerId: string) => void;
-  onShell: (containerId: string) => void;
+  onAttach: (sessionId: string) => void;
+  onShell: (sessionId: string) => void;
   onResume: (session: HermesSession) => void;
   onSessionDeleted: () => void;
   onNewPrompt?: () => void;
@@ -72,10 +67,10 @@ function getStatusIcon(session: HermesSession): string {
       return '●';
     case 'exited':
       return session.exitCode === 0 ? '✓' : '✗';
-    case 'paused':
+    case 'stopped':
       return '⏸';
-    case 'dead':
-      return '✗';
+    case 'unknown':
+      return '○';
     default:
       return '○';
   }
@@ -90,6 +85,7 @@ function getStatusText(session: HermesSession): string {
 
 export function SessionDetail({
   session: initialSession,
+  provider,
   onBack,
   onAttach,
   onShell,
@@ -106,18 +102,19 @@ export function SessionDetail({
   const { isTall } = useWindowSize();
 
   const isRunning = session.status === 'running';
-  const isStopped = session.status === 'exited' || session.status === 'dead';
+  const isStopped = session.status === 'exited' || session.status === 'stopped';
 
   // Poll CPU/memory stats for running containers
   const statsIds = useMemo(
-    () => (isRunning ? [session.containerId] : []),
-    [isRunning, session.containerId],
+    () => (isRunning ? [session.id] : []),
+    [isRunning, session.id],
   );
-  const containerStats = useContainerStats(statsIds);
-  const stats = containerStats.get(session.containerId);
+  const getStats = useMemo(() => provider.getStats?.bind(provider), [provider]);
+  const containerStats = useContainerStats(statsIds, getStats);
+  const stats = containerStats.get(session.id);
 
   // Get PR info from cache
-  const cachedPr = prCache[session.containerId];
+  const cachedPr = prCache[session.id];
   const prInfo: PrInfo | null = cachedPr?.prInfo ?? null;
 
   // Hover state for PR indicator
@@ -128,14 +125,14 @@ export function SessionDetail({
   // Fetch PR info if not cached or stale
   const fetchPrInfo = useCallback(async () => {
     const now = Date.now();
-    const cached = prCache[session.containerId];
+    const cached = prCache[session.id];
     const isStale = !cached || now - cached.lastChecked > PR_CACHE_TTL;
 
     if (isStale) {
       const info = await getPrForBranch(session.repo, session.branch);
-      setPrInfo(session.containerId, info);
+      setPrInfo(session.id, info);
     }
-  }, [session.containerId, session.repo, session.branch, prCache, setPrInfo]);
+  }, [session.id, session.repo, session.branch, prCache, setPrInfo]);
 
   // Fetch PR info on mount
   useEffect(() => {
@@ -145,7 +142,7 @@ export function SessionDetail({
   // Refresh session metadata periodically
   useEffect(() => {
     const interval = setInterval(async () => {
-      const updated = await getSession(session.containerId);
+      const updated = await provider.get(session.id);
       if (updated) {
         setSession(updated);
       } else {
@@ -158,7 +155,7 @@ export function SessionDetail({
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [session.containerId, onSessionDeleted, fetchPrInfo]);
+  }, [session.id, provider, onSessionDeleted, fetchPrInfo]);
 
   const showToast = useCallback((message: string, type: ToastType) => {
     setToast({ message, type });
@@ -169,34 +166,34 @@ export function SessionDetail({
     setActionInProgress(true);
     showToast('Stopping container...', 'info');
     try {
-      await stopContainer(session.containerId);
+      await provider.stop(session.id);
       showToast('Container stopped', 'success');
       // Refresh session
-      const updated = await getSession(session.containerId);
+      const updated = await provider.get(session.id);
       if (updated) {
         setSession(updated);
       }
     } catch (err) {
-      log.error({ err }, `Failed to stop container ${session.containerId}`);
+      log.error({ err }, `Failed to stop container ${session.id}`);
       showToast(`Failed to stop: ${err}`, 'error');
     } finally {
       setActionInProgress(false);
     }
-  }, [session.containerId, showToast]);
+  }, [session.id, provider, showToast]);
 
   const handleDelete = useCallback(async () => {
     setModal(null);
     setActionInProgress(true);
     try {
-      await removeContainer(session.containerId);
+      await provider.remove(session.id);
       showToast('Container removed', 'success');
       setTimeout(() => onSessionDeleted(), 1000);
     } catch (err) {
-      log.error({ err }, `Failed to remove container ${session.containerId}`);
+      log.error({ err }, `Failed to remove container ${session.id}`);
       showToast(`Failed to remove: ${err}`, 'error');
       setActionInProgress(false);
     }
-  }, [session.containerId, showToast, onSessionDeleted]);
+  }, [session.id, provider, showToast, onSessionDeleted]);
 
   const handleResume = useCallback(() => {
     onResume(session);
@@ -292,7 +289,7 @@ export function SessionDetail({
         category: 'Session',
         keybind: { key: 'a', ctrl: true },
         enabled: isRunning,
-        onSelect: () => onAttach(session.containerId),
+        onSelect: () => onAttach(session.id),
       },
       {
         id: 'session.shell',
@@ -301,7 +298,7 @@ export function SessionDetail({
         category: 'Session',
         keybind: { key: 's', ctrl: true },
         enabled: isRunning,
-        onSelect: () => onShell(session.containerId),
+        onSelect: () => onShell(session.id),
       },
       {
         id: 'session.stop',
@@ -361,7 +358,7 @@ export function SessionDetail({
       onNewPrompt,
       isRunning,
       isStopped,
-      session.containerId,
+      session.id,
       onAttach,
       onShell,
       handleResume,
@@ -387,12 +384,10 @@ export function SessionDetail({
 
   const statusColor =
     {
-      created: theme.info,
-      exited: session.exitCode === 0 ? theme.text : theme.error,
-      restarting: theme.accent,
       running: theme.success,
-      paused: theme.warning,
-      dead: theme.error,
+      exited: session.exitCode === 0 ? theme.text : theme.error,
+      stopped: theme.warning,
+      unknown: theme.textMuted,
     }[session.status] || theme.textMuted;
   const statusIcon = getStatusIcon(session);
   const statusText = getStatusText(session);
@@ -516,7 +511,8 @@ export function SessionDetail({
         flexDirection="column"
       >
         <LogViewer
-          containerId={session.containerId}
+          containerId={session.id}
+          streamLogs={(id) => provider.streamLogs(id)}
           isInteractive={session.interactive}
           onError={handleLogError}
         />
@@ -528,7 +524,7 @@ export function SessionDetail({
       {modal === 'stop' && (
         <ConfirmModal
           title="Stop Container?"
-          message={`Are you sure you want to stop ${session.containerName}?`}
+          message={`Are you sure you want to stop ${session.containerName ?? session.name}?`}
           detail="This will terminate the running agent session."
           confirmLabel="Stop"
           confirmColor={theme.warning}
@@ -540,7 +536,7 @@ export function SessionDetail({
       {modal === 'delete' && (
         <ConfirmModal
           title="Delete Container?"
-          message={`Are you sure you want to delete ${session.containerName}?`}
+          message={`Are you sure you want to delete ${session.containerName ?? session.name}?`}
           detail="This action cannot be undone."
           confirmLabel="Delete"
           confirmColor={theme.warning}

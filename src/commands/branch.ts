@@ -7,13 +7,13 @@ import { ensureGhAuth } from '../components/GhAuth.tsx';
 import { ensureClaudeAuth } from '../services/claude';
 import { type AgentType, projectConfig, readConfig } from '../services/config';
 import { type ForkResult, forkDatabase } from '../services/db';
-import { ensureDockerSandbox, startContainer } from '../services/docker';
 import {
   generateBranchName,
   type RepoInfo,
   tryGetRepoInfo,
 } from '../services/git';
 import { ensureOpencodeAuth } from '../services/opencode';
+import { getDefaultProvider } from '../services/sandbox';
 import { ensureGitignore } from '../utils';
 import { configAction } from './config';
 
@@ -60,7 +60,8 @@ export async function branchAction(
     process.exit(1);
   }
 
-  await ensureDockerSandbox();
+  const provider = await getDefaultProvider();
+  await provider.ensureReady();
 
   // Step 1: Check if we're in a git repository
   const repoInfo = await tryGetRepoInfo();
@@ -163,8 +164,9 @@ export async function branchAction(
   // Default to detached mode unless --print or --interactive is specified
   const detach = !options.print && !options.interactive;
 
-  const containerId = await startContainer({
+  const session = await provider.create({
     branchName,
+    name: branchName,
     prompt,
     repoInfo,
     agent: effectiveAgent,
@@ -177,7 +179,7 @@ export async function branchAction(
   });
 
   if (detach) {
-    console.log(`  Container started: ${containerId?.substring(0, 12)}`);
+    console.log(`  Container started: ${session?.id.substring(0, 12)}`);
     // Summary only shown in detached mode
     printSummary(branchName, repoInfo, forkResult);
   } else if (options.interactive) {

@@ -18,8 +18,8 @@ import {
 } from '../services/agents';
 import { useCommandStore, useRegisterCommands } from '../services/commands.tsx';
 import type { AgentType } from '../services/config';
-import type { HermesSession } from '../services/docker';
 import { log } from '../services/logger';
+import type { HermesSession } from '../services/sandbox';
 import type { SlashCommand } from '../services/slashCommands.ts';
 import { useTheme } from '../stores/themeStore.ts';
 import { FilterableSelector } from './FilterableSelector';

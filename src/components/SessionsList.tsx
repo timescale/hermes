@@ -5,16 +5,10 @@ import open from 'open';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useContainerStats } from '../hooks/useContainerStats';
 import { useCommandStore, useRegisterCommands } from '../services/commands.tsx';
-import {
-  formatCpuPercent,
-  formatMemUsage,
-  type HermesSession,
-  listHermesSessions,
-  removeContainer,
-  stopContainer,
-} from '../services/docker';
+import { formatCpuPercent, formatMemUsage } from '../services/docker';
 import { getPrForBranch } from '../services/github';
 import { log } from '../services/logger';
+import type { HermesSession, SandboxProvider } from '../services/sandbox';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
 import { formatShellError, type ShellError } from '../utils';
@@ -30,6 +24,7 @@ export type FilterMode = 'all' | 'running' | 'completed';
 export type ScopeMode = 'local' | 'global';
 
 export interface SessionsListProps {
+  provider: SandboxProvider;
   onSelect: (session: HermesSession) => void;
   onQuit: () => void;
   onNewTask?: () => void;
@@ -73,10 +68,10 @@ function getStatusIcon(session: HermesSession): string {
       return '●';
     case 'exited':
       return session.exitCode === 0 ? '✓' : '✗';
-    case 'paused':
+    case 'stopped':
       return '⏸';
-    case 'dead':
-      return '✗';
+    case 'unknown':
+      return '○';
     default:
       return '○';
   }
@@ -105,6 +100,7 @@ const SCOPE_LABELS: Record<ScopeMode, string> = {
 const SCOPE_ORDER: ScopeMode[] = ['local', 'global'];
 
 export function SessionsList({
+  provider,
   onSelect,
   onQuit,
   onNewTask,
@@ -138,11 +134,11 @@ export function SessionsList({
 
   // Poll CPU/memory stats for running containers
   const runningIds = useMemo(
-    () =>
-      sessions.filter((s) => s.status === 'running').map((s) => s.containerId),
+    () => sessions.filter((s) => s.status === 'running').map((s) => s.id),
     [sessions],
   );
-  const containerStats = useContainerStats(runningIds);
+  const getStats = useMemo(() => provider.getStats?.bind(provider), [provider]);
+  const containerStats = useContainerStats(runningIds, getStats);
 
   // Filter sessions: first by scope/mode, then fuzzy text search
   const filteredSessions = useMemo(() => {
@@ -187,7 +183,7 @@ export function SessionsList({
   const selectedIndex = useMemo(() => {
     if (selectedSessionId) {
       const index = filteredSessions.findIndex(
-        (s) => s.containerId === selectedSessionId,
+        (s) => s.id === selectedSessionId,
       );
       if (index >= 0) return index;
     }
@@ -199,7 +195,7 @@ export function SessionsList({
     (index: number) => {
       const session = filteredSessions[index];
       if (session) {
-        setSelectedSessionId(session.containerId);
+        setSelectedSessionId(session.id);
       }
     },
     [filteredSessions, setSelectedSessionId],
@@ -208,7 +204,7 @@ export function SessionsList({
   // Load sessions
   const loadSessions = useCallback(async () => {
     try {
-      const result = await listHermesSessions();
+      const result = await provider.list();
       setSessions(result);
       setLoading(false);
     } catch (err) {
@@ -216,7 +212,7 @@ export function SessionsList({
       setToast({ message: `Failed to load sessions: ${err}`, type: 'error' });
       setLoading(false);
     }
-  }, []);
+  }, [provider]);
 
   // Mouse handlers for session rows
   const handleRowClick = useCallback(
@@ -241,28 +237,32 @@ export function SessionsList({
 
     // Determine which session to select after deletion:
     // prefer next item, fall back to previous if deleting last item
-    const deleteIndex = filteredSessions.findIndex(
-      (s) => s.containerId === session.containerId,
-    );
+    const deleteIndex = filteredSessions.findIndex((s) => s.id === session.id);
     const nextSession =
       filteredSessions[deleteIndex + 1] ?? filteredSessions[deleteIndex - 1];
-    const nextSessionId = nextSession?.containerId ?? null;
+    const nextSessionId = nextSession?.id ?? null;
 
     setDeleteModal(null);
     setActionInProgress(true);
     try {
-      await removeContainer(session.containerId);
+      await provider.remove(session.id);
       setToast({ message: 'Session deleted', type: 'success' });
       // Update selection before refreshing so it persists
       setSelectedSessionId(nextSessionId);
       await loadSessions();
     } catch (err) {
-      log.error({ err }, `Failed to remove container ${session.containerId}`);
+      log.error({ err }, `Failed to remove container ${session.id}`);
       setToast({ message: `Failed to delete: ${err}`, type: 'error' });
     } finally {
       setActionInProgress(false);
     }
-  }, [deleteModal, filteredSessions, loadSessions, setSelectedSessionId]);
+  }, [
+    deleteModal,
+    filteredSessions,
+    provider,
+    loadSessions,
+    setSelectedSessionId,
+  ]);
 
   const handleStop = useCallback(async () => {
     if (!stopModal) return;
@@ -271,16 +271,16 @@ export function SessionsList({
     setActionInProgress(true);
     setToast({ message: 'Stopping container...', type: 'info' });
     try {
-      await stopContainer(session.containerId);
+      await provider.stop(session.id);
       setToast({ message: 'Container stopped', type: 'success' });
       await loadSessions();
     } catch (err) {
-      log.error({ err }, `Failed to stop container ${session.containerId}`);
+      log.error({ err }, `Failed to stop container ${session.id}`);
       setToast({ message: `Failed to stop: ${err}`, type: 'error' });
     } finally {
       setActionInProgress(false);
     }
-  }, [stopModal, loadSessions]);
+  }, [stopModal, provider, loadSessions]);
 
   const handleGitSwitch = useCallback(async () => {
     const session = filteredSessions[selectedIndex];
@@ -319,13 +319,13 @@ export function SessionsList({
     const now = Date.now();
     const cache = useSessionStore.getState().prCache;
     for (const session of sessions) {
-      const cached = cache[session.containerId];
+      const cached = cache[session.id];
       const isStale = !cached || now - cached.lastChecked > PR_CACHE_TTL;
 
       if (isStale) {
         getPrForBranch(session.repo, session.branch)
           .then((prInfo) => {
-            setPrInfo(session.containerId, prInfo);
+            setPrInfo(session.id, prInfo);
           })
           .catch((err) => {
             log.error({ err }, 'Failed to fetch PR info');
@@ -371,7 +371,7 @@ export function SessionsList({
     const selected = getSelectedSession();
     const isRunning = selected?.status === 'running';
     const isStopped =
-      selected?.status === 'exited' || selected?.status === 'dead';
+      selected?.status === 'exited' || selected?.status === 'stopped';
 
     return [
       {
@@ -517,7 +517,7 @@ export function SessionsList({
         keybind: { key: 'o', ctrl: true },
         onSelect: () => {
           if (selected) {
-            const prInfo = prCache[selected.containerId]?.prInfo;
+            const prInfo = prCache[selected.id]?.prInfo;
             if (prInfo) {
               open(prInfo.url)
                 .then(() => {
@@ -704,17 +704,15 @@ export function SessionsList({
             const statusIcon = getStatusIcon(session);
             const statusColor =
               {
-                created: theme.info,
-                exited: session.exitCode === 0 ? theme.text : theme.error,
-                restarting: theme.accent,
                 running: theme.success,
-                paused: theme.warning,
-                dead: theme.error,
+                exited: session.exitCode === 0 ? theme.text : theme.error,
+                stopped: theme.warning,
+                unknown: theme.textMuted,
               }[session.status] || theme.textMuted;
             const statusText = getStatusText(session);
 
             // PR info from cache
-            const cachedPr = prCache[session.containerId];
+            const cachedPr = prCache[session.id];
             const prInfo = cachedPr?.prInfo;
             const prText = prInfo
               ? `#${prInfo.number} ${prInfo.state.toLowerCase()}`
@@ -740,7 +738,7 @@ export function SessionsList({
               : '';
 
             // Stats for running containers
-            const stats = containerStats.get(session.containerId);
+            const stats = containerStats.get(session.id);
             const cpuText =
               session.status === 'running' && stats
                 ? formatCpuPercent(stats.cpuPercent)
@@ -762,7 +760,7 @@ export function SessionsList({
               : theme.textMuted;
             return (
               <box
-                key={session.containerId}
+                key={session.id}
                 height={1}
                 flexDirection="row"
                 backgroundColor={bgColor}

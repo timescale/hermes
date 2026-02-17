@@ -3,7 +3,7 @@
 // ============================================================================
 
 import { Command } from 'commander';
-import { listHermesSessions, resumeSession } from '../services/docker';
+import { getDefaultProvider } from '../services/sandbox';
 
 export async function resumeAction(
   containerId: string,
@@ -20,17 +20,16 @@ export async function resumeAction(
     process.exit(1);
   }
 
-  const sessions = await listHermesSessions();
+  const provider = await getDefaultProvider();
+  const sessions = await provider.list();
   const resolvedSession = sessions.find(
     (session) => session.name === containerId,
   );
   const fallbackSession = sessions.find(
     (session) =>
-      session.containerName === containerId ||
-      session.containerId === containerId,
+      session.containerName === containerId || session.id === containerId,
   );
-  const targetId =
-    resolvedSession?.containerId ?? fallbackSession?.containerId ?? containerId;
+  const targetId = resolvedSession?.id ?? fallbackSession?.id ?? containerId;
 
   try {
     const mode = options.shell
@@ -38,7 +37,7 @@ export async function resumeAction(
       : options.detach
         ? 'detached'
         : 'interactive';
-    const result = await resumeSession(targetId, {
+    const result = await provider.resume(targetId, {
       mode,
       prompt,
     });

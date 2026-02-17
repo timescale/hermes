@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { HermesSession } from '../services/docker';
+import type { HermesSession } from '../services/sandbox';
 import { formatRelativeTime, getStatusDisplay, truncate } from './sessions';
 
 describe('formatRelativeTime', () => {
@@ -64,9 +64,9 @@ describe('getStatusDisplay', () => {
     status: HermesSession['status'],
     exitCode?: number,
   ): HermesSession => ({
-    containerId: 'abc123',
-    containerName: 'hermes-test',
+    id: 'abc123',
     name: 'test',
+    provider: 'docker',
     branch: 'test',
     agent: 'opencode',
     repo: 'owner/repo',
@@ -105,32 +105,18 @@ describe('getStatusDisplay', () => {
     expect(display).toContain('(127)');
   });
 
-  test('shows yellow for paused status', () => {
-    const session = makeSession('paused');
+  test('shows yellow for stopped status', () => {
+    const session = makeSession('stopped');
     const display = getStatusDisplay(session);
-    expect(display).toContain('paused');
+    expect(display).toContain('stopped');
     expect(display).toContain('\x1b[33m'); // yellow ANSI code
   });
 
-  test('shows yellow for restarting status', () => {
-    const session = makeSession('restarting');
+  test('shows gray for unknown status', () => {
+    const session = makeSession('unknown');
     const display = getStatusDisplay(session);
-    expect(display).toContain('restarting');
-    expect(display).toContain('\x1b[33m'); // yellow ANSI code
-  });
-
-  test('shows red for dead status', () => {
-    const session = makeSession('dead');
-    const display = getStatusDisplay(session);
-    expect(display).toContain('dead');
-    expect(display).toContain('\x1b[31m'); // red ANSI code
-  });
-
-  test('shows cyan for created status', () => {
-    const session = makeSession('created');
-    const display = getStatusDisplay(session);
-    expect(display).toContain('created');
-    expect(display).toContain('\x1b[36m'); // cyan ANSI code
+    expect(display).toContain('unknown');
+    expect(display).toContain('\x1b[90m'); // gray ANSI code
   });
 });
 

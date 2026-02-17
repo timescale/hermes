@@ -1,18 +1,20 @@
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useEffect, useRef, useState } from 'react';
-import { type LogStream, streamContainerLogs } from '../services/docker';
+import type { LogStream } from '../services/sandbox';
 import { useTheme } from '../stores/themeStore';
 import { AnsiText } from './AnsiText';
 
 export interface LogViewerProps {
   containerId: string;
+  streamLogs: (id: string) => LogStream;
   isInteractive: boolean;
   onError?: (error: string) => void;
 }
 
 export function LogViewer({
   containerId,
+  streamLogs,
   isInteractive,
   onError,
 }: LogViewerProps) {
@@ -35,7 +37,7 @@ export function LogViewer({
     async function loadLogs() {
       try {
         setLines([]);
-        const stream = streamContainerLogs(containerId);
+        const stream = streamLogs(containerId);
         streamRef.current = stream;
         setLoading(false);
 
@@ -71,7 +73,7 @@ export function LogViewer({
         streamRef.current = null;
       }
     };
-  }, [containerId, isInteractive, onError]);
+  }, [containerId, streamLogs, isInteractive, onError]);
 
   useKeyboard((key) => {
     if (key.name === 'up' || key.raw === 'k') {
