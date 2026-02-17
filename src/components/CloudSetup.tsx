@@ -202,6 +202,11 @@ export function CloudSetup({
     const token = tokenInput.trim();
     if (!token) return;
 
+    log.info(
+      { tokenLength: token.length, prefix: token.slice(0, 4) },
+      'Submitting token for validation',
+    );
+
     setState({ type: 'validating-token', message: 'Validating token' });
 
     try {

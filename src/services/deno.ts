@@ -43,15 +43,25 @@ export async function deleteDenoToken(): Promise<void> {
  * Returns true if the token is valid.
  */
 export async function validateDenoToken(token: string): Promise<boolean> {
+  const masked = token.length > 8 ? `${token.slice(0, 8)}...` : '***';
   try {
     const response = await fetch('https://api.deno.com/v1/sandboxes', {
       headers: {
         Authorization: `Bearer ${token}`,
       },
     });
-    return response.ok;
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      log.info(
+        { status: response.status, body, token: masked },
+        'Deno Deploy token validation failed',
+      );
+      return false;
+    }
+    log.debug({ token: masked }, 'Deno Deploy token is valid');
+    return true;
   } catch (err) {
-    log.debug({ err }, 'Failed to validate Deno Deploy token');
+    log.info({ err, token: masked }, 'Failed to validate Deno Deploy token');
     return false;
   }
 }
