@@ -19,7 +19,7 @@ import {
 import { useCommandStore, useRegisterCommands } from '../services/commands.tsx';
 import type { AgentType } from '../services/config';
 import { log } from '../services/logger';
-import type { HermesSession } from '../services/sandbox';
+import type { HermesSession, SandboxProviderType } from '../services/sandbox';
 import type { SlashCommand } from '../services/slashCommands.ts';
 import { useTheme } from '../stores/themeStore.ts';
 import { FilterableSelector } from './FilterableSelector';
@@ -36,6 +36,7 @@ export type SubmitMode = 'async' | 'interactive' | 'plan';
 export interface PromptScreenProps {
   defaultAgent: AgentType;
   defaultModel?: string | null;
+  defaultSandboxProvider?: SandboxProviderType;
   resumeSession?: HermesSession; // If set, we're resuming this session
   /** Initial mount directory from CLI flag (enables mount mode if set) */
   initialMountDir?: string | null;
@@ -48,6 +49,7 @@ export interface PromptScreenProps {
     mode: SubmitMode;
     /** If set, mount this directory instead of git clone */
     mountDir?: string;
+    sandboxProvider: SandboxProviderType;
   }) => void;
   onShell: (mountDir?: string) => void; // Launch bash shell
   onCancel: () => void;
@@ -91,6 +93,7 @@ function findEquivalentModel(
 export function PromptScreen({
   defaultAgent,
   defaultModel = null,
+  defaultSandboxProvider,
   resumeSession,
   initialMountDir,
   forceMountMode = false,
@@ -102,6 +105,9 @@ export function PromptScreen({
   const textareaRef = useRef<TextareaRenderable>(null);
   const inputAnchorRef = useRef<BoxRenderable | null>(null);
   const [agent, setAgent] = useState<AgentType>(defaultAgent);
+  const [sandboxProvider, setSandboxProvider] = useState<SandboxProviderType>(
+    defaultSandboxProvider ?? 'docker',
+  );
   const [modelId, setModelId] = useState<string | null>(defaultModel);
   const modelMem = useRef({
     [defaultAgent]: defaultModel,
@@ -222,6 +228,15 @@ export function PromptScreen({
           }),
       },
       {
+        id: 'provider.toggle',
+        title: `Switch to ${sandboxProvider === 'docker' ? 'cloud' : 'Docker'} provider`,
+        description: 'Toggle between Docker and Cloud sandbox providers',
+        category: 'Prompt',
+        keybind: { key: 'e', ctrl: true },
+        onSelect: () =>
+          setSandboxProvider((p) => (p === 'docker' ? 'cloud' : 'docker')),
+      },
+      {
         id: 'theme.select',
         title: 'Select theme',
         description: 'Change the color theme',
@@ -237,6 +252,7 @@ export function PromptScreen({
       mountMode,
       forceMountMode,
       mountDir,
+      sandboxProvider,
       onShell,
       onViewSessions,
     ],
@@ -321,6 +337,42 @@ export function PromptScreen({
             }
             return !m;
           });
+        },
+      },
+      {
+        name: 'cloud',
+        description: 'Use cloud sandbox provider',
+        onSelect: () => {
+          setShowSlashCommands(false);
+          setSlashQuery('');
+          if (textareaRef.current) {
+            textareaRef.current.clear();
+          }
+          setSandboxProvider('cloud');
+        },
+      },
+      {
+        name: 'docker',
+        description: 'Use Docker sandbox provider',
+        onSelect: () => {
+          setShowSlashCommands(false);
+          setSlashQuery('');
+          if (textareaRef.current) {
+            textareaRef.current.clear();
+          }
+          setSandboxProvider('docker');
+        },
+      },
+      {
+        name: 'provider',
+        description: 'Toggle sandbox provider',
+        onSelect: () => {
+          setShowSlashCommands(false);
+          setSlashQuery('');
+          if (textareaRef.current) {
+            textareaRef.current.clear();
+          }
+          setSandboxProvider((p) => (p === 'docker' ? 'cloud' : 'docker'));
         },
       },
       {
@@ -420,6 +472,7 @@ export function PromptScreen({
       model: modelId,
       mode: submitMode,
       mountDir: mountMode ? (mountDir ?? process.cwd()) : undefined,
+      sandboxProvider,
     });
   };
 
@@ -584,6 +637,9 @@ export function PromptScreen({
                 {submitMode === 'plan' ? (
                   <text fg={theme.info}>[plan]</text>
                 ) : null}
+                {sandboxProvider === 'cloud' ? (
+                  <text fg={theme.accent}>[cloud]</text>
+                ) : null}
                 {mountMode ? <text fg={theme.warning}>[mount]</text> : null}
                 <text fg={model?.name ? theme.text : theme.textMuted}>
                   {model?.name || modelId || 'Loading...'}
@@ -621,6 +677,7 @@ export function PromptScreen({
                 ? []
                 : [['shift+tab', 'agent'] as [string, string]]),
               ['ctrl+space', 'model'],
+              ['ctrl+e', sandboxProvider === 'docker' ? 'Docker' : 'Cloud'],
               ['ctrl+l', 'sessions'],
               ['ctrl+p', 'commands'],
             ]}

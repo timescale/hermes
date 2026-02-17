@@ -459,7 +459,13 @@ export function SessionDetail({
             {statusIcon} {statusText}
           </text>
         </box>
-        {isRunning && stats && (
+        <box flexDirection="row" gap={1}>
+          <text fg={theme.textMuted}>provider</text>
+          <text fg={session.provider === 'cloud' ? theme.accent : theme.text}>
+            {session.provider === 'cloud' ? 'cloud' : 'docker'}
+          </text>
+        </box>
+        {isRunning && stats && session.provider !== 'cloud' && (
           <box flexDirection="row" gap={3}>
             <box flexDirection="row" gap={1}>
               <text fg={theme.textMuted}>cpu</text>
@@ -479,6 +485,28 @@ export function SessionDetail({
         <box height={1} flexDirection="row" gap={1} overflow="hidden">
           <text fg={theme.textMuted}>resumed from</text>
           <text>{session.resumedFrom}</text>
+        </box>
+      )}
+      {session.provider === 'cloud' && (
+        <box flexDirection="row" gap={3} height={1} overflow="hidden">
+          {session.region && (
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.textMuted}>region</text>
+              <text>{session.region}</text>
+            </box>
+          )}
+          {session.volumeSlug && (
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.textMuted}>volume</text>
+              <text fg={theme.textMuted}>{session.volumeSlug}</text>
+            </box>
+          )}
+          {session.snapshotSlug && (
+            <box flexDirection="row" gap={1}>
+              <text fg={theme.textMuted}>snapshot</text>
+              <text fg={theme.textMuted}>{session.snapshotSlug}</text>
+            </box>
+          )}
         </box>
       )}
 

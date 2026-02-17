@@ -50,6 +50,7 @@ export type ConfigWizardResult =
 
 type Step =
   | 'docker'
+  | 'sandbox-provider'
   | 'service'
   | 'agent'
   | 'model'
@@ -91,6 +92,7 @@ export function ConfigWizard({
   const steps = useMemo((): Step[] => {
     const list: Step[] = [
       'docker',
+      'sandbox-provider',
       'agent',
       'model',
       ...(tigerAvailable ? (['service'] as const) : []),
@@ -287,7 +289,43 @@ export function ConfigWizard({
     );
   }
 
-  // ---- Step 2: Service Selection ----
+  // ---- Step: Sandbox Provider Selection ----
+  if (step === 'sandbox-provider') {
+    const providerOptions: SelectOption[] = [
+      {
+        name: 'Docker (local)',
+        description: 'Run sandbox containers locally via Docker',
+        value: 'docker',
+      },
+      {
+        name: 'Cloud',
+        description: 'Run sandboxes in the cloud (Deno Deploy)',
+        value: 'cloud',
+      },
+    ];
+
+    const initialProviderIndex = config?.sandboxProvider === 'cloud' ? 1 : 0;
+
+    return (
+      <Selector
+        title={`Step ${stepNumber('sandbox-provider')}/${steps.length}: Sandbox Provider`}
+        description="Choose where to run sandbox containers."
+        options={providerOptions}
+        initialIndex={initialProviderIndex}
+        showBack
+        onSelect={(value) => {
+          setConfig((c) =>
+            c ? { ...c, sandboxProvider: value as 'docker' | 'cloud' } : c,
+          );
+          nextStep();
+        }}
+        onCancel={handleCancel}
+        onBack={() => nextStep(-1)}
+      />
+    );
+  }
+
+  // ---- Step: Service Selection ----
   if (step === 'service') {
     // Need config and services
     if (config === null || services === null) {
@@ -586,6 +624,10 @@ export async function configAction(): Promise<void> {
 
     console.log('\nConfiguration saved to .hermes/config.yml');
     console.log('\nSummary:');
+
+    console.log(
+      `  Sandbox: ${config.sandboxProvider === 'cloud' ? 'Cloud' : 'Docker (local)'}`,
+    );
 
     if (config.tigerServiceId === null) {
       console.log('  Database: (None) - forks will be skipped by default');

@@ -644,6 +644,9 @@ export function SessionsList({
         gap={2}
       >
         <text height={1} width={3} />
+        <text height={1} width={1} fg={theme.textMuted}>
+          P
+        </text>
         <text height={1} flexGrow={2} flexBasis={0} fg={theme.textMuted}>
           NAME
         </text>
@@ -737,16 +740,25 @@ export function SessionsList({
               ? formatRelativeTime(session.created)
               : '';
 
-            // Stats for running containers
+            // Provider badge
+            const providerBadge = session.provider === 'cloud' ? 'C' : 'D';
+            const providerColor =
+              session.provider === 'cloud' ? theme.accent : theme.textMuted;
+
+            // Stats for running containers (cloud doesn't support stats)
             const stats = containerStats.get(session.id);
             const cpuText =
-              session.status === 'running' && stats
-                ? formatCpuPercent(stats.cpuPercent)
-                : '-';
+              session.provider === 'cloud'
+                ? '-'
+                : session.status === 'running' && stats
+                  ? formatCpuPercent(stats.cpuPercent)
+                  : '-';
             const memText =
-              session.status === 'running' && stats
-                ? formatMemUsage(stats.memUsage, true)
-                : '-';
+              session.provider === 'cloud'
+                ? '-'
+                : session.status === 'running' && stats
+                  ? formatMemUsage(stats.memUsage, true)
+                  : '-';
 
             // Background: selected > hovered > default
             const bgColor = isSelected
@@ -772,6 +784,13 @@ export function SessionsList({
               >
                 <text height={1} width={3} fg={statusColor}>
                   {statusIcon}
+                </text>
+                <text
+                  height={1}
+                  width={1}
+                  fg={isSelected ? itemFg : providerColor}
+                >
+                  {providerBadge}
                 </text>
                 <text height={1} flexGrow={2} flexBasis={0} fg={itemFg}>
                   {session.name}

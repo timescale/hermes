@@ -38,8 +38,10 @@ import {
 } from '../services/opencode';
 import {
   getDefaultProvider,
+  getSandboxProvider,
   type HermesSession,
   type SandboxProvider,
+  type SandboxProviderType,
 } from '../services/sandbox';
 import { createTui } from '../services/tui.ts';
 import {
@@ -257,10 +259,23 @@ function SessionsApp({
       model: string,
       mode: SubmitMode = 'async',
       passedMountDir?: string,
+      selectedProvider?: SandboxProviderType,
     ) => {
       try {
+        // Use selected provider or fall back to the default provider prop
+        const activeProvider = selectedProvider
+          ? getSandboxProvider(selectedProvider)
+          : provider;
+
         log.debug(
-          { agent, model, prompt, mode, mountDir: passedMountDir },
+          {
+            agent,
+            model,
+            prompt,
+            mode,
+            mountDir: passedMountDir,
+            provider: selectedProvider,
+          },
           'startSession received',
         );
 
@@ -274,7 +289,7 @@ function SessionsApp({
           step: 'Preparing sandbox environment',
           mode,
         });
-        await provider.ensureImage({
+        await activeProvider.ensureImage({
           onProgress: (progress) => {
             if (progress.type === 'pulling-cache') {
               setView((v) =>
@@ -406,7 +421,7 @@ function SessionsApp({
               }
             : v,
         );
-        const session = await provider.create({
+        const session = await activeProvider.create({
           branchName,
           name: branchName,
           prompt,
@@ -445,10 +460,23 @@ function SessionsApp({
       model: string,
       mode: SubmitMode = 'async',
       mountDir?: string,
+      selectedProvider?: SandboxProviderType,
     ) => {
       try {
+        // Use selected provider or fall back to the default provider prop
+        const activeProvider = selectedProvider
+          ? getSandboxProvider(selectedProvider)
+          : provider;
+
         log.debug(
-          { session: session.name, model, prompt, mode, mountDir },
+          {
+            session: session.name,
+            model,
+            prompt,
+            mode,
+            mountDir,
+            provider: selectedProvider,
+          },
           'resumeSessionFlow received',
         );
 
@@ -503,7 +531,7 @@ function SessionsApp({
             : v,
         );
 
-        const newId = await provider.resume(session.id, {
+        const newId = await activeProvider.resume(session.id, {
           mode: 'detached',
           prompt,
           model,
@@ -515,7 +543,7 @@ function SessionsApp({
         );
 
         // Fetch the newly created session and show its detail
-        const newSession = await provider.get(newId);
+        const newSession = await activeProvider.get(newId);
         if (newSession) {
           setView({ type: 'detail', session: newSession });
         } else {
@@ -698,16 +726,40 @@ function SessionsApp({
             resumeSess?.agent ?? initialAgent ?? config?.agent ?? 'opencode'
           }
           defaultModel={resumeSess?.model ?? initialModel ?? config?.model}
+          defaultSandboxProvider={
+            resumeSess?.provider ?? config?.sandboxProvider ?? provider.type
+          }
           resumeSession={resumeSess}
           initialMountDir={resumeSess?.mountDir ?? initialMountDir}
           forceMountMode={!isGitRepo}
-          onSubmit={({ prompt, agent, model, mode, mountDir }) => {
+          onSubmit={({
+            prompt,
+            agent,
+            model,
+            mode,
+            mountDir,
+            sandboxProvider: selectedProvider,
+          }) => {
             if (resumeSess) {
               // Resume flow - use resumeSessionFlow for loading screen
-              resumeSessionFlow(resumeSess, prompt, model, mode, mountDir);
+              resumeSessionFlow(
+                resumeSess,
+                prompt,
+                model,
+                mode,
+                mountDir,
+                selectedProvider,
+              );
             } else {
               // Fresh session
-              startSession(prompt, agent, model, mode, mountDir);
+              startSession(
+                prompt,
+                agent,
+                model,
+                mode,
+                mountDir,
+                selectedProvider,
+              );
             }
           }}
           onShell={(shellMountDir) => {
