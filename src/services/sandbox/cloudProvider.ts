@@ -76,15 +76,38 @@ function buildAgentCommand(options: CreateSandboxOptions): string {
 // ============================================================================
 
 /**
- * Write all credential files (Claude, OpenCode, gh CLI) into a sandbox
- * using the SDK's filesystem API.
+ * Write all credential files (Claude, OpenCode, gh CLI) into a sandbox.
+ *
+ * Uses sudo + tee to write files as root since the sandbox default user
+ * does not have write access to /home/hermes. After writing, ownership
+ * is fixed to the hermes user.
  */
 async function injectCredentials(sandbox: Sandbox): Promise<void> {
   const credFiles = await getCredentialFiles();
   for (const file of credFiles) {
     const dir = file.path.substring(0, file.path.lastIndexOf('/'));
-    await sandbox.fs.mkdir(dir, { recursive: true });
-    await sandbox.fs.writeTextFile(file.path, file.value);
+    // Base64-encode to safely pass arbitrary content through the shell
+    const b64 = Buffer.from(file.value).toString('base64');
+    const proc = await sandbox.spawn('sudo', {
+      args: [
+        'bash',
+        '-c',
+        `mkdir -p ${dir} && echo '${b64}' | base64 -d > ${file.path} && chown hermes:hermes ${file.path}`,
+      ],
+      stdout: 'piped',
+      stderr: 'piped',
+    });
+    const result = await proc.output();
+    if (!result.status.success) {
+      log.warn(
+        {
+          path: file.path,
+          exitCode: result.status.code,
+          stderr: result.stderrText ?? '',
+        },
+        'Failed to inject credential file',
+      );
+    }
   }
 }
 
@@ -108,20 +131,24 @@ async function sshIntoSandbox(sandbox: Sandbox): Promise<void> {
 /**
  * Run a shell command in a sandbox as a given user (or root).
  *
- * Uses `sandbox.spawn('bash', ...)` instead of `sandbox.sh` because `sh`
- * is a tagged template literal that shell-escapes interpolated values,
- * which would break compound commands containing `|`, `&&`, `>`, etc.
+ * Uses `sandbox.spawn(...)` instead of `sandbox.sh` because `sh` is a
+ * tagged template literal that shell-escapes interpolated values, which
+ * would break compound commands containing `|`, `&&`, `>`, etc.
+ *
+ * The Deno sandbox default user is NOT root, so we use `sudo` to run
+ * commands as root (the default) or `sudo su - {user}` to run as a
+ * specific user.
  */
 async function sh(
   sandbox: Sandbox,
   command: string,
   options?: { user?: string },
 ): Promise<void> {
-  const cmd = options?.user
-    ? `su - ${options.user} -c ${JSON.stringify(command)}`
-    : command;
-  const proc = await sandbox.spawn('bash', {
-    args: ['-c', cmd],
+  const args = options?.user
+    ? ['-c', `su - ${options.user} -c ${JSON.stringify(command)}`]
+    : ['-c', command];
+  const proc = await sandbox.spawn('sudo', {
+    args: ['bash', ...args],
     stdout: 'piped',
     stderr: 'piped',
   });
@@ -129,7 +156,7 @@ async function sh(
   if (!result.status.success) {
     const stderr = result.stderrText ?? '';
     log.warn(
-      { command: cmd, exitCode: result.status.code, stderr },
+      { command, exitCode: result.status.code, stderr },
       'Sandbox command failed',
     );
   }

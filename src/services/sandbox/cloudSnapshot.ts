@@ -27,20 +27,24 @@ function getBaseSnapshotSlug(): string {
  * Run a shell command in a sandbox and wait for it to finish.
  * Throws if the command exits with a non-zero status.
  *
- * Uses `sandbox.spawn('bash', ...)` instead of `sandbox.sh` because `sh`
- * is a tagged template literal that shell-escapes interpolated values,
- * which would break compound commands containing `|`, `&&`, `>`, etc.
+ * Uses `sandbox.spawn(...)` instead of `sandbox.sh` because `sh` is a
+ * tagged template literal that shell-escapes interpolated values, which
+ * would break compound commands containing `|`, `&&`, `>`, etc.
+ *
+ * The Deno sandbox default user is NOT root, so we use `sudo` to run
+ * commands as root (the default) or `sudo su - {user}` to run as a
+ * specific user.
  */
 async function sh(
   sandbox: Sandbox,
   command: string,
   options?: { user?: string },
 ): Promise<void> {
-  const cmd = options?.user
-    ? `su - ${options.user} -c ${JSON.stringify(command)}`
-    : command;
-  const proc = await sandbox.spawn('bash', {
-    args: ['-c', cmd],
+  const args = options?.user
+    ? ['-c', `su - ${options.user} -c ${JSON.stringify(command)}`]
+    : ['-c', command];
+  const proc = await sandbox.spawn('sudo', {
+    args: ['bash', ...args],
     stdout: 'piped',
     stderr: 'piped',
   });
@@ -48,7 +52,7 @@ async function sh(
   if (!result.status.success) {
     const stderr = result.stderrText ?? '';
     log.warn(
-      { command: cmd, exitCode: result.status.code, stderr },
+      { command, exitCode: result.status.code, stderr },
       'Sandbox command failed',
     );
     throw new Error(
