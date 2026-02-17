@@ -2,6 +2,8 @@
 // Deno Deploy Token Management
 // ============================================================================
 
+import { Client } from '@deno/sandbox';
+
 import {
   deleteHermesSecret,
   getHermesSecret,
@@ -37,27 +39,16 @@ export async function deleteDenoToken(): Promise<void> {
 
 /**
  * Validate a Deno Deploy token by attempting an API call.
- * Uses the sandbox list endpoint since that's what we actually need
- * the token for, and it works with both personal (ddp_) and
+ * Uses the SDK's Client to list sandboxes since that's what we actually
+ * need the token for, and it works with both personal (ddp_) and
  * organization (ddo_) tokens.
  * Returns true if the token is valid.
  */
 export async function validateDenoToken(token: string): Promise<boolean> {
   const masked = token.length > 8 ? `${token.slice(0, 8)}...` : '***';
   try {
-    const response = await fetch('https://console.deno.com/api/v2/sandboxes', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      log.info(
-        { status: response.status, body, token: masked },
-        'Deno Deploy token validation failed',
-      );
-      return false;
-    }
+    const client = new Client({ token });
+    await client.sandboxes.list();
     log.debug({ token: masked }, 'Deno Deploy token is valid');
     return true;
   } catch (err) {

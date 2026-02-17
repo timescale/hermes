@@ -1,264 +1,149 @@
 // ============================================================================
-// Deno Deploy REST API Client
+// Deno Deploy API - Thin wrapper around the @deno/sandbox SDK
 // ============================================================================
+
+import type {
+  SandboxMetadata,
+  SandboxOptions,
+  SnapshotInit,
+  VolumeInit,
+} from '@deno/sandbox';
+import { Client, Sandbox } from '@deno/sandbox';
 
 import { log } from '../logger.ts';
 
-/**
- * Console API — management operations (list, create volumes/snapshots, etc.)
- * The official @deno/sandbox SDK uses this same base URL.
- */
-const CONSOLE_API_BASE = 'https://console.deno.com/api/v2';
-
-/**
- * Regional sandbox API — individual sandbox operations (exec, fs, ssh).
- * Each region has its own endpoint: {region}.sandbox-api.deno.net
- */
-function sandboxApiBase(region: string): string {
-  return `https://${region}.sandbox-api.deno.net/api/v3`;
-}
-
-export interface DenoSandbox {
-  id: string;
-  region: string;
-  status: string;
-  labels?: Record<string, string>;
-  createdAt: string;
-}
+// Re-export SDK types that our code consumes
+export type { SandboxMetadata, SandboxOptions };
+export { Sandbox };
 
 export interface DenoVolume {
   id: string;
   slug: string;
   region: string;
-  capacity: string;
-  createdAt: string;
 }
 
 export interface DenoSnapshot {
   id: string;
   slug: string;
   region: string;
-  createdAt: string;
 }
 
-export interface CreateSandboxRequest {
-  region: string;
-  root?: string;
-  timeout?: string;
-  memory?: string;
-  volumes?: Record<string, string>;
-  labels?: Record<string, string>;
-  env?: Record<string, string>;
-}
-
-export interface CreateVolumeRequest {
-  slug: string;
-  region: string;
-  capacity?: string;
-  from?: string;
-}
-
+/**
+ * High-level Deno Deploy API client wrapping the @deno/sandbox SDK.
+ *
+ * Uses `Client` for management operations (volumes, snapshots, listing)
+ * and `Sandbox` for individual sandbox lifecycle (create, connect, exec).
+ */
 export class DenoApiClient {
+  private client: Client;
   private token: string;
 
   constructor(token: string) {
     this.token = token;
+    this.client = new Client({ token });
+  }
+
+  // --------------------------------------------------------------------------
+  // Sandbox Management (via Client)
+  // --------------------------------------------------------------------------
+
+  async listSandboxes(
+    labels?: Record<string, string>,
+  ): Promise<SandboxMetadata[]> {
+    return this.client.sandboxes.list({ labels });
   }
 
   /**
-   * Make a request to the Deno Console API (management operations).
+   * Create a new sandbox. Returns the SDK Sandbox instance which provides
+   * spawn(), fs, env, ssh, and other capabilities over its WebSocket connection.
    */
-  private async consoleRequest<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-  ): Promise<T> {
-    const url = `${CONSOLE_API_BASE}${path}`;
-    log.debug({ method, url }, 'Deno Console API request');
-
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-    } catch (err) {
-      throw new Error(
-        `Network error connecting to Deno Deploy API: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => 'unknown error');
-      throw new Error(`Deno API error ${response.status}: ${text}`);
-    }
-
-    // Some endpoints return 204 No Content
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json() as Promise<T>;
-  }
-
-  /**
-   * Make a request to the regional sandbox API (per-sandbox operations).
-   */
-  private async sandboxRequest<T>(
-    method: string,
-    region: string,
-    path: string,
-    body?: unknown,
-  ): Promise<T> {
-    const url = `${sandboxApiBase(region)}${path}`;
-    log.debug({ method, url }, 'Deno Sandbox API request');
-
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method,
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-    } catch (err) {
-      throw new Error(
-        `Network error connecting to Deno Sandbox API: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => 'unknown error');
-      throw new Error(`Deno Sandbox API error ${response.status}: ${text}`);
-    }
-
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json() as Promise<T>;
-  }
-
-  // --------------------------------------------------------------------------
-  // Sandbox Management (Console API)
-  // --------------------------------------------------------------------------
-
-  async listSandboxes(labels?: Record<string, string>): Promise<DenoSandbox[]> {
-    let path = '/sandboxes';
-    if (labels) {
-      const params = new URLSearchParams();
-      for (const [key, value] of Object.entries(labels)) {
-        params.append(`label.${key}`, value);
-      }
-      path += `?${params.toString()}`;
-    }
-    return this.consoleRequest('GET', path);
-  }
-
-  async getSandbox(id: string): Promise<DenoSandbox> {
-    return this.consoleRequest('GET', `/sandboxes/${id}`);
-  }
-
-  async createSandbox(req: CreateSandboxRequest): Promise<DenoSandbox> {
-    return this.consoleRequest('POST', '/sandboxes', req);
-  }
-
-  async killSandbox(id: string): Promise<void> {
-    return this.consoleRequest('DELETE', `/sandboxes/${id}`);
-  }
-
-  // --------------------------------------------------------------------------
-  // Per-Sandbox Operations (Regional Sandbox API)
-  // --------------------------------------------------------------------------
-
-  async execInSandbox(
-    id: string,
-    region: string,
-    command: string[],
-    options?: { user?: string; workDir?: string },
-  ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    return this.sandboxRequest('POST', region, `/sandbox/${id}/exec`, {
-      command,
-      ...options,
-    });
-  }
-
-  async writeFile(
-    id: string,
-    region: string,
-    path: string,
-    content: string,
-    options?: { mode?: number; user?: string },
-  ): Promise<void> {
-    return this.sandboxRequest('POST', region, `/sandbox/${id}/fs/write`, {
-      path,
-      content,
-      ...options,
-    });
-  }
-
-  async readFile(id: string, region: string, path: string): Promise<string> {
-    const result = await this.sandboxRequest<{ content: string }>(
-      'POST',
-      region,
-      `/sandbox/${id}/fs/read`,
-      { path },
+  async createSandbox(
+    options: Omit<SandboxOptions, 'token'>,
+  ): Promise<Sandbox> {
+    log.debug(
+      { region: options.region, root: options.root },
+      'Creating sandbox',
     );
-    return result.content;
+    return Sandbox.create({ ...options, token: this.token });
   }
 
-  async exposeSsh(
-    id: string,
-    region: string,
-  ): Promise<{ hostname: string; username: string }> {
-    return this.sandboxRequest('POST', region, `/sandbox/${id}/ssh/expose`);
+  /**
+   * Connect to an existing sandbox by ID.
+   */
+  async connectSandbox(id: string): Promise<Sandbox> {
+    log.debug({ id }, 'Connecting to sandbox');
+    return Sandbox.connect(id, { token: this.token });
+  }
+
+  /**
+   * Kill a sandbox by ID. Uses Sandbox.connect + kill to avoid needing
+   * an active connection.
+   */
+  async killSandbox(id: string): Promise<void> {
+    log.debug({ id }, 'Killing sandbox');
+    try {
+      const sandbox = await Sandbox.connect(id, { token: this.token });
+      await sandbox.kill();
+    } catch (err) {
+      // Sandbox may already be dead — log and swallow
+      log.debug({ err, id }, 'Failed to kill sandbox (may already be stopped)');
+    }
   }
 
   // --------------------------------------------------------------------------
-  // Volume Management (Console API)
+  // Volume Management (via Client)
   // --------------------------------------------------------------------------
 
-  async createVolume(req: CreateVolumeRequest): Promise<DenoVolume> {
-    return this.consoleRequest('POST', '/volumes', req);
-  }
-
-  async getVolume(id: string): Promise<DenoVolume> {
-    return this.consoleRequest('GET', `/volumes/${id}`);
+  async createVolume(init: VolumeInit): Promise<DenoVolume> {
+    log.debug({ slug: init.slug, region: init.region }, 'Creating volume');
+    const vol = await this.client.volumes.create(init);
+    return { id: vol.id, slug: vol.slug, region: vol.region };
   }
 
   async listVolumes(): Promise<DenoVolume[]> {
-    return this.consoleRequest('GET', '/volumes');
+    const result = await this.client.volumes.list();
+    return result.items.map((v) => ({
+      id: v.id,
+      slug: v.slug,
+      region: v.region,
+    }));
   }
 
-  async deleteVolume(id: string): Promise<void> {
-    return this.consoleRequest('DELETE', `/volumes/${id}`);
+  async deleteVolume(idOrSlug: string): Promise<void> {
+    log.debug({ idOrSlug }, 'Deleting volume');
+    await this.client.volumes.delete(idOrSlug);
   }
 
-  async snapshotVolume(volumeId: string, slug: string): Promise<DenoSnapshot> {
-    return this.consoleRequest('POST', `/volumes/${volumeId}/snapshot`, {
-      slug,
-    });
+  async snapshotVolume(
+    volumeIdOrSlug: string,
+    init: SnapshotInit,
+  ): Promise<DenoSnapshot> {
+    log.debug({ volumeIdOrSlug, slug: init.slug }, 'Snapshotting volume');
+    const snap = await this.client.volumes.snapshot(volumeIdOrSlug, init);
+    return { id: snap.id, slug: snap.slug, region: snap.region };
   }
 
   // --------------------------------------------------------------------------
-  // Snapshot Management (Console API)
+  // Snapshot Management (via Client)
   // --------------------------------------------------------------------------
 
   async listSnapshots(): Promise<DenoSnapshot[]> {
-    return this.consoleRequest('GET', '/snapshots');
+    const result = await this.client.snapshots.list();
+    return result.items.map((s) => ({
+      id: s.id,
+      slug: s.slug,
+      region: s.region,
+    }));
   }
 
-  async getSnapshot(id: string): Promise<DenoSnapshot> {
-    return this.consoleRequest('GET', `/snapshots/${id}`);
+  async getSnapshot(idOrSlug: string): Promise<DenoSnapshot | null> {
+    const snap = await this.client.snapshots.get(idOrSlug);
+    if (!snap) return null;
+    return { id: snap.id, slug: snap.slug, region: snap.region };
   }
 
-  async deleteSnapshot(id: string): Promise<void> {
-    return this.consoleRequest('DELETE', `/snapshots/${id}`);
+  async deleteSnapshot(idOrSlug: string): Promise<void> {
+    log.debug({ idOrSlug }, 'Deleting snapshot');
+    await this.client.snapshots.delete(idOrSlug);
   }
 }

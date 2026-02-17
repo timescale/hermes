@@ -2,6 +2,8 @@
 // Cloud Snapshot Management - Base image for cloud sandboxes
 // ============================================================================
 
+import type { Sandbox } from '@deno/sandbox';
+
 import packageJson from '../../../package.json' with { type: 'json' };
 import { log } from '../logger.ts';
 import { DenoApiClient } from './denoApi.ts';
@@ -19,6 +21,40 @@ export type SnapshotBuildProgress =
 
 function getBaseSnapshotSlug(): string {
   return `hermes-base-${packageJson.version}`;
+}
+
+/**
+ * Run a shell command in a sandbox and wait for it to finish.
+ * Throws if the command exits with a non-zero status.
+ *
+ * Uses `sandbox.spawn('bash', ...)` instead of `sandbox.sh` because `sh`
+ * is a tagged template literal that shell-escapes interpolated values,
+ * which would break compound commands containing `|`, `&&`, `>`, etc.
+ */
+async function sh(
+  sandbox: Sandbox,
+  command: string,
+  options?: { user?: string },
+): Promise<void> {
+  const cmd = options?.user
+    ? `su - ${options.user} -c ${JSON.stringify(command)}`
+    : command;
+  const proc = await sandbox.spawn('bash', {
+    args: ['-c', cmd],
+    stdout: 'piped',
+    stderr: 'piped',
+  });
+  const result = await proc.output();
+  if (!result.status.success) {
+    const stderr = result.stderrText ?? '';
+    log.warn(
+      { command: cmd, exitCode: result.status.code, stderr },
+      'Sandbox command failed',
+    );
+    throw new Error(
+      `Command failed (exit ${result.status.code}): ${stderr.slice(0, 200)}`,
+    );
+  }
 }
 
 /**
@@ -40,14 +76,13 @@ export async function ensureCloudSnapshot(options: {
   // 1. Check if snapshot already exists
   onProgress?.({ type: 'checking' });
   try {
-    const snapshots = await client.listSnapshots();
-    const existing = snapshots.find((s) => s.slug === snapshotSlug);
+    const existing = await client.getSnapshot(snapshotSlug);
     if (existing) {
       onProgress?.({ type: 'exists', snapshotSlug });
       return snapshotSlug;
     }
   } catch (err) {
-    log.debug({ err }, 'Failed to list snapshots');
+    log.debug({ err }, 'Failed to check snapshot');
   }
 
   // 2. Create a temporary bootable volume
@@ -64,7 +99,7 @@ export async function ensureCloudSnapshot(options: {
     from: 'builtin:debian-13',
   });
 
-  let sandboxId: string | null = null;
+  let sandbox: Sandbox | null = null;
 
   try {
     // 3. Boot sandbox with volume as writable root
@@ -73,13 +108,12 @@ export async function ensureCloudSnapshot(options: {
       message: 'Booting build sandbox',
     });
 
-    const sandbox = await client.createSandbox({
-      region,
+    sandbox = await client.createSandbox({
+      region: region as 'ord' | 'ams',
       root: volume.slug,
       timeout: '30m',
       memory: '2GiB',
     });
-    sandboxId = sandbox.id;
 
     // 4. Install system packages
     onProgress?.({
@@ -87,36 +121,33 @@ export async function ensureCloudSnapshot(options: {
       message: 'Installing system packages',
       detail: 'git, curl, ca-certificates, zip, unzip, tar, gzip, jq',
     });
-    await client.execInSandbox(sandboxId, region, [
-      'bash',
-      '-c',
+    await sh(
+      sandbox,
       'apt-get update && apt-get install -y git curl ca-certificates zip unzip tar gzip jq openssh-client',
-    ]);
+    );
 
     // 5. Install GitHub CLI
     onProgress?.({
       type: 'installing',
       message: 'Installing GitHub CLI',
     });
-    await client.execInSandbox(sandboxId, region, [
-      'bash',
-      '-c',
+    await sh(
+      sandbox,
       [
         'curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg',
         'chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg',
         'echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null',
         'apt-get update && apt-get install -y gh',
       ].join(' && '),
-    ]);
+    );
 
     // 6. Create hermes user
     onProgress?.({
       type: 'installing',
       message: 'Creating hermes user',
     });
-    await client.execInSandbox(sandboxId, region, [
-      'bash',
-      '-c',
+    await sh(
+      sandbox,
       [
         'groupadd -g 10000 hermes',
         'useradd -u 10000 -g hermes -m -s /bin/bash hermes',
@@ -124,7 +155,7 @@ export async function ensureCloudSnapshot(options: {
         'chown -R hermes:hermes /home/hermes',
         'mkdir -p /work && chown hermes:hermes /work',
       ].join(' && '),
-    ]);
+    );
 
     // 7. Install Claude Code
     onProgress?.({
@@ -132,38 +163,27 @@ export async function ensureCloudSnapshot(options: {
       message: 'Installing Claude Code',
       detail: 'This may take a minute',
     });
-    await client.execInSandbox(
-      sandboxId,
-      region,
-      ['bash', '-c', 'curl -fsSL https://claude.ai/install.sh | bash'],
-      { user: 'hermes' },
-    );
+    await sh(sandbox, 'curl -fsSL https://claude.ai/install.sh | bash', {
+      user: 'hermes',
+    });
 
     // 8. Install Tiger CLI
     onProgress?.({
       type: 'installing',
       message: 'Installing Tiger CLI',
     });
-    await client.execInSandbox(
-      sandboxId,
-      region,
-      ['bash', '-c', 'curl -fsSL https://cli.tigerdata.com | sh'],
-      { user: 'hermes' },
-    );
+    await sh(sandbox, 'curl -fsSL https://cli.tigerdata.com | sh', {
+      user: 'hermes',
+    });
 
     // 9. Install OpenCode
     onProgress?.({
       type: 'installing',
       message: 'Installing OpenCode',
     });
-    await client.execInSandbox(
-      sandboxId,
-      region,
-      [
-        'bash',
-        '-c',
-        'curl -fsSL https://opencode.ai/install | bash && mkdir -p /home/hermes/.opencode/bin && ln -sf /home/hermes/.local/bin/opencode /home/hermes/.opencode/bin/opencode',
-      ],
+    await sh(
+      sandbox,
+      'curl -fsSL https://opencode.ai/install | bash && mkdir -p /home/hermes/.opencode/bin && ln -sf /home/hermes/.local/bin/opencode /home/hermes/.opencode/bin/opencode',
       { user: 'hermes' },
     );
 
@@ -172,14 +192,9 @@ export async function ensureCloudSnapshot(options: {
       type: 'installing',
       message: 'Configuring git',
     });
-    await client.execInSandbox(
-      sandboxId,
-      region,
-      [
-        'bash',
-        '-c',
-        'git config --global user.email "hermes@tigerdata.com" && git config --global user.name "Hermes Agent"',
-      ],
+    await sh(
+      sandbox,
+      'git config --global user.email "hermes@tigerdata.com" && git config --global user.name "Hermes Agent"',
       { user: 'hermes' },
     );
 
@@ -188,7 +203,7 @@ export async function ensureCloudSnapshot(options: {
       type: 'snapshotting',
       message: 'Creating snapshot (this may take a moment)',
     });
-    await client.snapshotVolume(volume.id, snapshotSlug);
+    await client.snapshotVolume(volume.id, { slug: snapshotSlug });
 
     onProgress?.({ type: 'done', snapshotSlug });
     return snapshotSlug;
@@ -199,7 +214,7 @@ export async function ensureCloudSnapshot(options: {
       message: 'Cleaning up build resources',
     });
     try {
-      if (sandboxId) await client.killSandbox(sandboxId);
+      if (sandbox) await sandbox.kill();
     } catch (err) {
       log.debug({ err }, 'Failed to kill build sandbox');
     }

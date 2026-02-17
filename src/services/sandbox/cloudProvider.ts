@@ -1,6 +1,8 @@
 // ============================================================================
-// Cloud Sandbox Provider - Deno Deploy implementation
+// Cloud Sandbox Provider - Deno Deploy implementation using @deno/sandbox SDK
 // ============================================================================
+
+import type { Sandbox } from '@deno/sandbox';
 
 import packageJson from '../../../package.json' with { type: 'json' };
 import { runCloudSetupScreen } from '../../components/CloudSetup.tsx';
@@ -74,18 +76,15 @@ function buildAgentCommand(options: CreateSandboxOptions): string {
 // ============================================================================
 
 /**
- * Write all credential files (Claude, OpenCode, gh CLI) into a sandbox.
+ * Write all credential files (Claude, OpenCode, gh CLI) into a sandbox
+ * using the SDK's filesystem API.
  */
-async function injectCredentials(
-  client: DenoApiClient,
-  sandboxId: string,
-  region: string,
-): Promise<void> {
+async function injectCredentials(sandbox: Sandbox): Promise<void> {
   const credFiles = await getCredentialFiles();
   for (const file of credFiles) {
     const dir = file.path.substring(0, file.path.lastIndexOf('/'));
-    await client.execInSandbox(sandboxId, region, ['mkdir', '-p', dir]);
-    await client.writeFile(sandboxId, region, file.path, file.value);
+    await sandbox.fs.mkdir(dir, { recursive: true });
+    await sandbox.fs.writeTextFile(file.path, file.value);
   }
 }
 
@@ -96,18 +95,44 @@ async function injectCredentials(
 /**
  * Expose SSH on a sandbox and run an interactive SSH session.
  */
-async function sshIntoSandbox(
-  client: DenoApiClient,
-  sandboxId: string,
-  region: string,
-): Promise<void> {
-  const sshInfo = await client.exposeSsh(sandboxId, region);
+async function sshIntoSandbox(sandbox: Sandbox): Promise<void> {
+  const sshInfo = await sandbox.exposeSsh();
   enterSubprocessScreen();
   const proc = Bun.spawn(['ssh', `${sshInfo.username}@${sshInfo.hostname}`], {
     stdio: ['inherit', 'inherit', 'inherit'],
   });
   await proc.exited;
   resetTerminal();
+}
+
+/**
+ * Run a shell command in a sandbox as a given user (or root).
+ *
+ * Uses `sandbox.spawn('bash', ...)` instead of `sandbox.sh` because `sh`
+ * is a tagged template literal that shell-escapes interpolated values,
+ * which would break compound commands containing `|`, `&&`, `>`, etc.
+ */
+async function sh(
+  sandbox: Sandbox,
+  command: string,
+  options?: { user?: string },
+): Promise<void> {
+  const cmd = options?.user
+    ? `su - ${options.user} -c ${JSON.stringify(command)}`
+    : command;
+  const proc = await sandbox.spawn('bash', {
+    args: ['-c', cmd],
+    stdout: 'piped',
+    stderr: 'piped',
+  });
+  const result = await proc.output();
+  if (!result.status.success) {
+    const stderr = result.stderrText ?? '';
+    log.warn(
+      { command: cmd, exitCode: result.status.code, stderr },
+      'Sandbox command failed',
+    );
+  }
 }
 
 // ============================================================================
@@ -238,10 +263,10 @@ export class CloudSandboxProvider implements SandboxProvider {
     const env: Record<string, string> = { ...options.envVars };
 
     // 3. Boot sandbox from base snapshot with work volume
-    let sandbox: Awaited<ReturnType<typeof client.createSandbox>>;
+    let sandbox: Sandbox;
     try {
       sandbox = await client.createSandbox({
-        region,
+        region: region as 'ord' | 'ams',
         root: baseSnapshot,
         timeout: '30m',
         memory: '2GiB',
@@ -274,56 +299,44 @@ export class CloudSandboxProvider implements SandboxProvider {
       throw err;
     }
 
-    // 4. Inject credential files
-    await injectCredentials(client, sandbox.id, region);
+    try {
+      // 4. Inject credential files
+      await injectCredentials(sandbox);
 
-    // 5. Clone repo and create branch
-    if (options.repoInfo && options.isGitRepo !== false) {
-      await client.execInSandbox(
-        sandbox.id,
-        region,
-        [
-          'bash',
-          '-c',
+      // 5. Clone repo and create branch
+      if (options.repoInfo && options.isGitRepo !== false) {
+        await sh(
+          sandbox,
           `cd /work && gh auth setup-git && gh repo clone ${options.repoInfo.fullName} app && cd app && git switch -c "hermes/${options.branchName}"`,
-        ],
-        { user: 'hermes' },
-      );
-    } else {
-      await client.execInSandbox(sandbox.id, region, [
-        'bash',
-        '-c',
-        'mkdir -p /work/app',
-      ]);
-    }
+          { user: 'hermes' },
+        );
+      } else {
+        await sh(sandbox, 'mkdir -p /work/app');
+      }
 
-    // 6. Run init script if configured
-    if (options.initScript) {
-      await client.execInSandbox(
-        sandbox.id,
-        region,
-        ['bash', '-c', `cd /work/app && ${options.initScript}`],
-        { user: 'hermes' },
-      );
-    }
+      // 6. Run init script if configured
+      if (options.initScript) {
+        await sh(sandbox, `cd /work/app && ${options.initScript}`, {
+          user: 'hermes',
+        });
+      }
 
-    // 7. Start agent process
-    const agentCommand = buildAgentCommand(options);
-    if (options.interactive) {
-      // Interactive mode: SSH into sandbox
-      await sshIntoSandbox(client, sandbox.id, region);
-    } else {
-      // Detached mode: start agent in background
-      await client.execInSandbox(
-        sandbox.id,
-        region,
-        [
-          'bash',
-          '-c',
+      // 7. Start agent process
+      const agentCommand = buildAgentCommand(options);
+      if (options.interactive) {
+        // Interactive mode: SSH into sandbox
+        await sshIntoSandbox(sandbox);
+      } else {
+        // Detached mode: start agent in background
+        await sh(
+          sandbox,
           `cd /work/app && nohup ${agentCommand} > /work/agent.log 2>&1 &`,
-        ],
-        { user: 'hermes' },
-      );
+          { user: 'hermes' },
+        );
+      }
+    } finally {
+      // Close our WebSocket connection — the sandbox keeps running
+      await sandbox.close();
     }
 
     // 8. Record in SQLite
@@ -355,38 +368,35 @@ export class CloudSandboxProvider implements SandboxProvider {
     const baseSnapshot = `hermes-base-${packageJson.version}`;
 
     const sandbox = await client.createSandbox({
-      region,
+      region: region as 'ord' | 'ams',
       root: baseSnapshot,
       timeout: '30m',
       memory: '2GiB',
       labels: { 'hermes.managed': 'true' },
     });
 
-    // Inject credentials
-    await injectCredentials(client, sandbox.id, region);
-
-    // Clone repo if available
-    if (options.repoInfo && options.isGitRepo !== false) {
-      await client.execInSandbox(
-        sandbox.id,
-        region,
-        [
-          'bash',
-          '-c',
-          `cd /work && gh auth setup-git && gh repo clone ${options.repoInfo.fullName} app`,
-        ],
-        { user: 'hermes' },
-      );
-    }
-
-    // SSH into the sandbox
-    await sshIntoSandbox(client, sandbox.id, region);
-
-    // Kill sandbox after shell exits
     try {
-      await client.killSandbox(sandbox.id);
-    } catch {
-      // Best-effort cleanup
+      // Inject credentials
+      await injectCredentials(sandbox);
+
+      // Clone repo if available
+      if (options.repoInfo && options.isGitRepo !== false) {
+        await sh(
+          sandbox,
+          `cd /work && gh auth setup-git && gh repo clone ${options.repoInfo.fullName} app`,
+          { user: 'hermes' },
+        );
+      }
+
+      // SSH into the sandbox
+      await sshIntoSandbox(sandbox);
+    } finally {
+      // Kill sandbox after shell exits
+      try {
+        await sandbox.kill();
+      } catch {
+        // Best-effort cleanup
+      }
     }
   }
 
@@ -424,10 +434,10 @@ export class CloudSandboxProvider implements SandboxProvider {
 
     // 2. Boot new sandbox from base snapshot + resume volume
     const baseSnapshot = `hermes-base-${packageJson.version}`;
-    let sandbox: Awaited<ReturnType<typeof client.createSandbox>>;
+    let sandbox: Sandbox;
     try {
       sandbox = await client.createSandbox({
-        region,
+        region: region as 'ord' | 'ams',
         root: baseSnapshot,
         timeout: '30m',
         memory: '2GiB',
@@ -458,49 +468,48 @@ export class CloudSandboxProvider implements SandboxProvider {
       throw err;
     }
 
-    // 3. Inject fresh credentials
-    await injectCredentials(client, sandbox.id, region);
+    try {
+      // 3. Inject fresh credentials
+      await injectCredentials(sandbox);
 
-    // 4. Start agent with continue flag or open shell
-    const agent = existing.agent as AgentType;
-    const model = options.model ?? existing.model;
-    const modelArg = model ? ` --model ${model}` : '';
-    const extraArgs = options.agentArgs?.length
-      ? ` ${options.agentArgs.join(' ')}`
-      : '';
+      // 4. Start agent with continue flag or open shell
+      const agent = existing.agent as AgentType;
+      const model = options.model ?? existing.model;
+      const modelArg = model ? ` --model ${model}` : '';
+      const extraArgs = options.agentArgs?.length
+        ? ` ${options.agentArgs.join(' ')}`
+        : '';
 
-    if (options.mode === 'shell' || options.mode === 'interactive') {
-      await sshIntoSandbox(client, sandbox.id, region);
-    } else {
-      // Detached: run agent in background with continue flag
-      let agentCmd: string;
-      if (agent === 'claude') {
-        const hasPlanArgs =
-          options.agentArgs?.includes('--permission-mode') ?? false;
-        const skipPermsFlag = hasPlanArgs
-          ? '--allow-dangerously-skip-permissions'
-          : '--dangerously-skip-permissions';
-        const promptArg = ' -p';
-        agentCmd = `claude -c${promptArg}${extraArgs}${modelArg} ${skipPermsFlag}`;
+      if (options.mode === 'shell' || options.mode === 'interactive') {
+        await sshIntoSandbox(sandbox);
       } else {
-        agentCmd = `opencode${modelArg}${extraArgs} run -c`;
-      }
+        // Detached: run agent in background with continue flag
+        let agentCmd: string;
+        if (agent === 'claude') {
+          const hasPlanArgs =
+            options.agentArgs?.includes('--permission-mode') ?? false;
+          const skipPermsFlag = hasPlanArgs
+            ? '--allow-dangerously-skip-permissions'
+            : '--dangerously-skip-permissions';
+          const promptArg = ' -p';
+          agentCmd = `claude -c${promptArg}${extraArgs}${modelArg} ${skipPermsFlag}`;
+        } else {
+          agentCmd = `opencode${modelArg}${extraArgs} run -c`;
+        }
 
-      if (options.prompt) {
-        const b64 = Buffer.from(options.prompt).toString('base64');
-        agentCmd = `echo '${b64}' | base64 -d | ${agentCmd}`;
-      }
+        if (options.prompt) {
+          const b64 = Buffer.from(options.prompt).toString('base64');
+          agentCmd = `echo '${b64}' | base64 -d | ${agentCmd}`;
+        }
 
-      await client.execInSandbox(
-        sandbox.id,
-        region,
-        [
-          'bash',
-          '-c',
+        await sh(
+          sandbox,
           `cd /work/app && nohup ${agentCmd} > /work/agent.log 2>&1 &`,
-        ],
-        { user: 'hermes' },
-      );
+          { user: 'hermes' },
+        );
+      }
+    } finally {
+      await sandbox.close();
     }
 
     // 5. Update SQLite
@@ -609,7 +618,9 @@ export class CloudSandboxProvider implements SandboxProvider {
       if (session?.volumeSlug) {
         const snapshotSlug = `hermes-resume-${session.name}-${Date.now()}`;
         try {
-          await client.snapshotVolume(session.volumeSlug, snapshotSlug);
+          await client.snapshotVolume(session.volumeSlug, {
+            slug: snapshotSlug,
+          });
           updateSessionSnapshot(db, sessionId, snapshotSlug);
         } catch (err) {
           log.warn({ err }, 'Failed to snapshot volume before stop');
@@ -630,11 +641,14 @@ export class CloudSandboxProvider implements SandboxProvider {
   // --------------------------------------------------------------------------
 
   async attach(sessionId: string): Promise<void> {
-    const client = await this.getClient();
-    const db = openSessionDb();
-    const session = dbGetSession(db, sessionId);
-    const region = session?.region ?? (await this.resolveRegion());
-    await sshIntoSandbox(client, sessionId, region);
+    const token = await getDenoToken();
+    if (!token) throw new Error('No Deno Deploy token available');
+    const sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
+    try {
+      await sshIntoSandbox(sandbox);
+    } finally {
+      await sandbox.close();
+    }
   }
 
   async shell(sessionId: string): Promise<void> {
@@ -648,20 +662,19 @@ export class CloudSandboxProvider implements SandboxProvider {
 
   async getLogs(sessionId: string, tail?: number): Promise<string> {
     try {
-      const client = await this.getClient();
-      const db = openSessionDb();
-      const session = dbGetSession(db, sessionId);
-      const region = session?.region ?? (await this.resolveRegion());
-      const content = await client.readFile(
-        sessionId,
-        region,
-        '/work/agent.log',
-      );
-      if (tail) {
-        const lines = content.split('\n');
-        return lines.slice(-tail).join('\n');
+      const token = await getDenoToken();
+      if (!token) return '';
+      const sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
+      try {
+        const content = await sandbox.fs.readTextFile('/work/agent.log');
+        if (tail) {
+          const lines = content.split('\n');
+          return lines.slice(-tail).join('\n');
+        }
+        return content;
+      } finally {
+        await sandbox.close();
       }
-      return content;
     } catch (err) {
       log.debug({ err }, 'Failed to read cloud sandbox logs');
       return '';
@@ -671,27 +684,28 @@ export class CloudSandboxProvider implements SandboxProvider {
   streamLogs(sessionId: string): LogStream {
     let stopped = false;
     let lastOffset = 0;
-    const resolveRegion = this.resolveRegion.bind(this);
 
     const stop = () => {
       stopped = true;
     };
 
     async function* generateLines(): AsyncIterable<string> {
-      const db = openSessionDb();
-      const session = dbGetSession(db, sessionId);
-      const region = session?.region ?? (await resolveRegion());
-
       while (!stopped) {
         try {
           const token = await getDenoToken();
           if (!token) break;
-          const client = new DenoApiClient(token);
-          const content = await client.readFile(
+
+          // Connect, read, disconnect on each poll
+          const sandbox = await new DenoApiClient(token).connectSandbox(
             sessionId,
-            region,
-            '/work/agent.log',
           );
+          let content: string;
+          try {
+            content = await sandbox.fs.readTextFile('/work/agent.log');
+          } finally {
+            await sandbox.close();
+          }
+
           const newContent = content.substring(lastOffset);
           lastOffset = content.length;
 
@@ -702,7 +716,7 @@ export class CloudSandboxProvider implements SandboxProvider {
             }
           }
         } catch {
-          // File might not exist yet
+          // File might not exist yet or sandbox may be gone
         }
 
         // Poll every 2 seconds
