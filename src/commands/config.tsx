@@ -5,6 +5,7 @@
 import type { SelectOption } from '@opentui/core';
 import { Command } from 'commander';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CloudSetup } from '../components/CloudSetup';
 import { CopyOnSelect } from '../components/CopyOnSelect';
 import { DockerSetup } from '../components/DockerSetup';
 import { FilterableSelector } from '../components/FilterableSelector';
@@ -51,6 +52,8 @@ export type ConfigWizardResult =
 type Step =
   | 'docker'
   | 'sandbox-provider'
+  | 'cloud-region'
+  | 'cloud-setup'
   | 'service'
   | 'agent'
   | 'model'
@@ -93,6 +96,9 @@ export function ConfigWizard({
     const list: Step[] = [
       'docker',
       'sandbox-provider',
+      ...(config?.sandboxProvider === 'cloud'
+        ? (['cloud-region', 'cloud-setup'] as const)
+        : []),
       'agent',
       'model',
       ...(tigerAvailable ? (['service'] as const) : []),
@@ -100,7 +106,7 @@ export function ConfigWizard({
       'gh-auth-check',
     ];
     return list;
-  }, [tigerAvailable]);
+  }, [config?.sandboxProvider, tigerAvailable]);
 
   const nextStep = useCallback(
     (dir = 1) => {
@@ -315,12 +321,85 @@ export function ConfigWizard({
         showBack
         onSelect={(value) => {
           setConfig((c) =>
-            c ? { ...c, sandboxProvider: value as 'docker' | 'cloud' } : c,
+            c
+              ? {
+                  ...c,
+                  sandboxProvider: value as 'docker' | 'cloud',
+                  cloudRegion:
+                    (value as 'docker' | 'cloud') === 'cloud'
+                      ? (c.cloudRegion ?? 'ord')
+                      : undefined,
+                }
+              : c,
           );
           nextStep();
         }}
         onCancel={handleCancel}
         onBack={() => nextStep(-1)}
+      />
+    );
+  }
+
+  // ---- Step: Cloud Region Selection ----
+  if (step === 'cloud-region') {
+    const regionOptions: SelectOption[] = [
+      {
+        name: 'US East (ord)',
+        description: 'Chicago region',
+        value: 'ord',
+      },
+      {
+        name: 'EU West (ams)',
+        description: 'Amsterdam region',
+        value: 'ams',
+      },
+    ];
+
+    const initialRegion = config?.cloudRegion ?? 'ord';
+    const initialIndex = regionOptions.findIndex(
+      (opt) => opt.value === initialRegion,
+    );
+
+    return (
+      <Selector
+        title={`Step ${stepNumber('cloud-region')}/${steps.length}: Cloud Region`}
+        description="Choose the default cloud region for sandbox sessions."
+        options={regionOptions}
+        initialIndex={initialIndex >= 0 ? initialIndex : 0}
+        showBack
+        onSelect={(value) => {
+          setConfig((c) =>
+            c ? { ...c, cloudRegion: value as 'ord' | 'ams' } : c,
+          );
+          nextStep();
+        }}
+        onCancel={handleCancel}
+        onBack={() => nextStep(-1)}
+      />
+    );
+  }
+
+  // ---- Step: Cloud Setup ----
+  if (step === 'cloud-setup') {
+    return (
+      <CloudSetup
+        title={`Step ${stepNumber('cloud-setup')}/${steps.length}: Cloud Setup`}
+        showBack
+        onBack={() => nextStep(-1)}
+        onComplete={(result) => {
+          if (result.type === 'ready') {
+            nextStep();
+            return;
+          }
+          if (result.type === 'cancelled') {
+            onComplete({ type: 'cancelled' });
+            return;
+          }
+          onComplete({
+            type: 'error',
+            message: result.error ?? 'Cloud setup failed',
+          });
+        }}
       />
     );
   }

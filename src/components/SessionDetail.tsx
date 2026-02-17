@@ -8,7 +8,13 @@ import { useCommandStore, useRegisterCommands } from '../services/commands.tsx';
 import { formatCpuPercent, formatMemUsage } from '../services/docker';
 import { getPrForBranch, type PrInfo } from '../services/github';
 import { log } from '../services/logger';
-import type { HermesSession, SandboxProvider } from '../services/sandbox';
+import {
+  getProviderForSession,
+  getSandboxProvider,
+  type HermesSession,
+  type SandboxProvider,
+  type SandboxStats,
+} from '../services/sandbox';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
 import { formatShellError, type ShellError } from '../utils';
@@ -85,7 +91,6 @@ function getStatusText(session: HermesSession): string {
 
 export function SessionDetail({
   session: initialSession,
-  provider,
   onBack,
   onAttach,
   onShell,
@@ -103,13 +108,26 @@ export function SessionDetail({
 
   const isRunning = session.status === 'running';
   const isStopped = session.status === 'exited' || session.status === 'stopped';
+  const sessionProvider = getProviderForSession(session);
 
   // Poll CPU/memory stats for running containers
   const statsIds = useMemo(
     () => (isRunning ? [session.id] : []),
     [isRunning, session.id],
   );
-  const getStats = useMemo(() => provider.getStats?.bind(provider), [provider]);
+  const getStats = useCallback(
+    async (ids: string[]): Promise<Map<string, SandboxStats>> => {
+      if (session.provider !== 'docker') {
+        return new Map();
+      }
+      const dockerProvider = getSandboxProvider('docker');
+      if (!dockerProvider.getStats) {
+        return new Map();
+      }
+      return dockerProvider.getStats(ids);
+    },
+    [session.provider],
+  );
   const containerStats = useContainerStats(statsIds, getStats);
   const stats = containerStats.get(session.id);
 
@@ -142,7 +160,7 @@ export function SessionDetail({
   // Refresh session metadata periodically
   useEffect(() => {
     const interval = setInterval(async () => {
-      const updated = await provider.get(session.id);
+      const updated = await sessionProvider.get(session.id);
       if (updated) {
         setSession(updated);
       } else {
@@ -155,7 +173,7 @@ export function SessionDetail({
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [session.id, provider, onSessionDeleted, fetchPrInfo]);
+  }, [session.id, sessionProvider, onSessionDeleted, fetchPrInfo]);
 
   const showToast = useCallback((message: string, type: ToastType) => {
     setToast({ message, type });
@@ -166,10 +184,10 @@ export function SessionDetail({
     setActionInProgress(true);
     showToast('Stopping container...', 'info');
     try {
-      await provider.stop(session.id);
+      await sessionProvider.stop(session.id);
       showToast('Container stopped', 'success');
       // Refresh session
-      const updated = await provider.get(session.id);
+      const updated = await sessionProvider.get(session.id);
       if (updated) {
         setSession(updated);
       }
@@ -179,13 +197,13 @@ export function SessionDetail({
     } finally {
       setActionInProgress(false);
     }
-  }, [session.id, provider, showToast]);
+  }, [session.id, sessionProvider, showToast]);
 
   const handleDelete = useCallback(async () => {
     setModal(null);
     setActionInProgress(true);
     try {
-      await provider.remove(session.id);
+      await sessionProvider.remove(session.id);
       showToast('Container removed', 'success');
       setTimeout(() => onSessionDeleted(), 1000);
     } catch (err) {
@@ -193,7 +211,7 @@ export function SessionDetail({
       showToast(`Failed to remove: ${err}`, 'error');
       setActionInProgress(false);
     }
-  }, [session.id, provider, showToast, onSessionDeleted]);
+  }, [session.id, sessionProvider, showToast, onSessionDeleted]);
 
   const handleResume = useCallback(() => {
     onResume(session);
@@ -540,7 +558,7 @@ export function SessionDetail({
       >
         <LogViewer
           containerId={session.id}
-          streamLogs={(id) => provider.streamLogs(id)}
+          streamLogs={(id) => sessionProvider.streamLogs(id)}
           isInteractive={session.interactive}
           onError={handleLogError}
         />

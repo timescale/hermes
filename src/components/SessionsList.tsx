@@ -8,7 +8,14 @@ import { useCommandStore, useRegisterCommands } from '../services/commands.tsx';
 import { formatCpuPercent, formatMemUsage } from '../services/docker';
 import { getPrForBranch } from '../services/github';
 import { log } from '../services/logger';
-import type { HermesSession, SandboxProvider } from '../services/sandbox';
+import {
+  getProviderForSession,
+  getSandboxProvider,
+  type HermesSession,
+  listAllSessions,
+  type SandboxProvider,
+  type SandboxStats,
+} from '../services/sandbox';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
 import { formatShellError, type ShellError } from '../utils';
@@ -100,7 +107,6 @@ const SCOPE_LABELS: Record<ScopeMode, string> = {
 const SCOPE_ORDER: ScopeMode[] = ['local', 'global'];
 
 export function SessionsList({
-  provider,
   onSelect,
   onQuit,
   onNewTask,
@@ -137,7 +143,27 @@ export function SessionsList({
     () => sessions.filter((s) => s.status === 'running').map((s) => s.id),
     [sessions],
   );
-  const getStats = useMemo(() => provider.getStats?.bind(provider), [provider]);
+  const getStats = useCallback(
+    async (ids: string[]): Promise<Map<string, SandboxStats>> => {
+      const dockerIds = ids.filter((id) =>
+        sessions.some(
+          (session) =>
+            session.id === id &&
+            session.provider === 'docker' &&
+            session.status === 'running',
+        ),
+      );
+      if (dockerIds.length === 0) {
+        return new Map();
+      }
+      const dockerProvider = getSandboxProvider('docker');
+      if (!dockerProvider.getStats) {
+        return new Map();
+      }
+      return dockerProvider.getStats(dockerIds);
+    },
+    [sessions],
+  );
   const containerStats = useContainerStats(runningIds, getStats);
 
   // Filter sessions: first by scope/mode, then fuzzy text search
@@ -204,7 +230,7 @@ export function SessionsList({
   // Load sessions
   const loadSessions = useCallback(async () => {
     try {
-      const result = await provider.list();
+      const result = await listAllSessions();
       setSessions(result);
       setLoading(false);
     } catch (err) {
@@ -212,7 +238,7 @@ export function SessionsList({
       setToast({ message: `Failed to load sessions: ${err}`, type: 'error' });
       setLoading(false);
     }
-  }, [provider]);
+  }, []);
 
   // Mouse handlers for session rows
   const handleRowClick = useCallback(
@@ -245,7 +271,7 @@ export function SessionsList({
     setDeleteModal(null);
     setActionInProgress(true);
     try {
-      await provider.remove(session.id);
+      await getProviderForSession(session).remove(session.id);
       setToast({ message: 'Session deleted', type: 'success' });
       // Update selection before refreshing so it persists
       setSelectedSessionId(nextSessionId);
@@ -256,13 +282,7 @@ export function SessionsList({
     } finally {
       setActionInProgress(false);
     }
-  }, [
-    deleteModal,
-    filteredSessions,
-    provider,
-    loadSessions,
-    setSelectedSessionId,
-  ]);
+  }, [deleteModal, filteredSessions, loadSessions, setSelectedSessionId]);
 
   const handleStop = useCallback(async () => {
     if (!stopModal) return;
@@ -271,7 +291,7 @@ export function SessionsList({
     setActionInProgress(true);
     setToast({ message: 'Stopping container...', type: 'info' });
     try {
-      await provider.stop(session.id);
+      await getProviderForSession(session).stop(session.id);
       setToast({ message: 'Container stopped', type: 'success' });
       await loadSessions();
     } catch (err) {
@@ -280,7 +300,7 @@ export function SessionsList({
     } finally {
       setActionInProgress(false);
     }
-  }, [stopModal, provider, loadSessions]);
+  }, [stopModal, loadSessions]);
 
   const handleGitSwitch = useCallback(async () => {
     const session = filteredSessions[selectedIndex];

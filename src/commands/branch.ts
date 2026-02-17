@@ -62,6 +62,7 @@ export async function branchAction(
 
   const provider = await getDefaultProvider();
   await provider.ensureReady();
+  await provider.ensureImage();
 
   // Step 1: Check if we're in a git repository
   const repoInfo = await tryGetRepoInfo();

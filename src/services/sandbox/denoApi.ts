@@ -85,8 +85,17 @@ export class DenoApiClient {
       const sandbox = await Sandbox.connect(id, { token: this.token });
       await sandbox.kill();
     } catch (err) {
-      // Sandbox may already be dead — log and swallow
-      log.debug({ err, id }, 'Failed to kill sandbox (may already be stopped)');
+      const message = err instanceof Error ? err.message : String(err);
+      // Treat missing sandboxes as already stopped; propagate other failures.
+      if (
+        message.includes('not found') ||
+        message.includes('404') ||
+        message.includes('already')
+      ) {
+        log.debug({ err, id }, 'Sandbox already stopped or missing');
+        return;
+      }
+      throw err;
     }
   }
 

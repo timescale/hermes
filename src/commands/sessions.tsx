@@ -40,8 +40,10 @@ import {
 } from '../services/opencode';
 import {
   getDefaultProvider,
+  getProviderForSession,
   getSandboxProvider,
   type HermesSession,
+  listAllSessions,
   type SandboxProvider,
   type SandboxProviderType,
 } from '../services/sandbox';
@@ -122,10 +124,14 @@ interface SessionsResult {
   resumeAgentArgs?: string[];
   // For shell: session ID if resuming, undefined if fresh shell
   resumeSessionId?: string;
+  // Provider to use when resuming an existing session
+  resumeProvider?: SandboxProviderType;
   // For shell: optional mount directory for fresh shell
   shellMountDir?: string;
   // For shell: whether running from a git repo
   shellIsGitRepo?: boolean;
+  // For shell: provider to use
+  shellProvider?: SandboxProviderType;
   // For start-interactive: info needed to start the container
   startInfo?: {
     prompt: string;
@@ -136,6 +142,7 @@ interface SessionsResult {
     mountDir?: string;
     isGitRepo?: boolean;
     agentArgs?: string[];
+    provider: SandboxProviderType;
   };
   // For needs-agent-auth: info needed to retry after login
   authInfo?: {
@@ -434,6 +441,7 @@ function SessionsApp({
               agent,
               model,
               branchName,
+              provider: activeProvider.type,
               envVars: forkResult?.envVars,
               mountDir,
               isGitRepo: inGitRepo,
@@ -562,6 +570,7 @@ function SessionsApp({
             resumeModel: model,
             resumeMountDir: mountDir,
             resumeAgentArgs: agentArgs,
+            resumeProvider: session.provider,
           });
           return;
         }
@@ -865,12 +874,13 @@ function SessionsApp({
               );
             }
           }}
-          onShell={(shellMountDir) => {
+          onShell={(shellMountDir, selectedProvider) => {
             if (resumeSess) {
               // Shell on resumed container
               onComplete({
                 type: 'shell',
                 resumeSessionId: resumeSess.id,
+                resumeProvider: resumeSess.provider,
               });
             } else {
               // Fresh shell container
@@ -878,6 +888,7 @@ function SessionsApp({
                 type: 'shell',
                 shellMountDir,
                 shellIsGitRepo: propsRef.current.isGitRepo,
+                shellProvider: selectedProvider,
               });
             }
           }}
@@ -1075,7 +1086,10 @@ export async function runSessionsTui({
 
     // Handle attach action - needs to happen after TUI cleanup
     if (result.type === 'attach' && result.sessionId) {
-      await provider.attach(result.sessionId);
+      const actionProvider = result.session
+        ? getProviderForSession(result.session)
+        : provider;
+      await actionProvider.attach(result.sessionId);
       // Return to the session detail view after detaching
       if (result.session) {
         nextView = 'detail';
@@ -1086,7 +1100,10 @@ export async function runSessionsTui({
 
     // Handle exec-shell action - open a bash shell in a running container
     if (result.type === 'exec-shell' && result.sessionId) {
-      await provider.shell(result.sessionId);
+      const actionProvider = result.session
+        ? getProviderForSession(result.session)
+        : provider;
+      await actionProvider.shell(result.sessionId);
       // Return to the session detail view after exiting the shell
       if (result.session) {
         nextView = 'detail';
@@ -1098,7 +1115,10 @@ export async function runSessionsTui({
     if (result.type === 'resume' && result.sessionId) {
       enterSubprocessScreen();
       try {
-        await provider.resume(result.sessionId, {
+        const actionProvider = getSandboxProvider(
+          result.resumeProvider ?? provider.type,
+        );
+        await actionProvider.resume(result.sessionId, {
           mode: 'interactive',
           model: result.resumeModel,
           mountDir: result.resumeMountDir,
@@ -1118,13 +1138,21 @@ export async function runSessionsTui({
       try {
         if (result.resumeSessionId) {
           // Shell on resumed container
-          await provider.resume(result.resumeSessionId, { mode: 'shell' });
+          const actionProvider = getSandboxProvider(
+            result.resumeProvider ?? provider.type,
+          );
+          await actionProvider.resume(result.resumeSessionId, {
+            mode: 'shell',
+          });
         } else {
           // Fresh shell container
+          const actionProvider = getSandboxProvider(
+            result.shellProvider ?? provider.type,
+          );
           const shellRepoInfo = result.shellIsGitRepo
             ? await getRepoInfo()
             : null;
-          await provider.createShell({
+          await actionProvider.createShell({
             repoInfo: shellRepoInfo,
             mountDir: result.shellMountDir,
             isGitRepo: result.shellIsGitRepo,
@@ -1145,6 +1173,7 @@ export async function runSessionsTui({
         agent,
         model,
         branchName,
+        provider: startProvider,
         envVars,
         mountDir: startMountDir,
         isGitRepo: startIsGitRepo = true,
@@ -1153,7 +1182,8 @@ export async function runSessionsTui({
       enterSubprocessScreen();
       try {
         const startRepoInfo = startIsGitRepo ? await getRepoInfo() : null;
-        await provider.create({
+        const actionProvider = getSandboxProvider(startProvider);
+        await actionProvider.create({
           branchName,
           name: branchName,
           prompt,
@@ -1320,8 +1350,7 @@ async function sessionsAction(options: SessionsOptions): Promise<void> {
   }
 
   // CLI output modes
-  const provider = await getDefaultProvider();
-  const sessions = await provider.list();
+  const sessions = await listAllSessions();
 
   // Filter to only running sessions unless --all is specified
   const filteredSessions = options.all
@@ -1392,8 +1421,7 @@ const cleanCommand = new Command('clean')
   .option('-a, --all', 'Remove all containers (including running)')
   .option('-f, --force', 'Skip confirmation')
   .action(async (options: { all: boolean; force: boolean }) => {
-    const provider = await getDefaultProvider();
-    const sessions = await provider.list();
+    const sessions = await listAllSessions();
 
     const toRemove = options.all
       ? sessions
@@ -1433,7 +1461,8 @@ const cleanCommand = new Command('clean')
     for (const session of toRemove) {
       const name = displayName(session);
       try {
-        await provider.remove(session.id);
+        const actionProvider = getProviderForSession(session);
+        await actionProvider.remove(session.id);
         console.log(`Removed ${name}`);
       } catch (err) {
         log.error({ err }, `Failed to remove ${name}`);

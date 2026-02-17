@@ -51,7 +51,7 @@ export interface PromptScreenProps {
     mountDir?: string;
     sandboxProvider: SandboxProviderType;
   }) => void;
-  onShell: (mountDir?: string) => void; // Launch bash shell
+  onShell: (mountDir?: string, sandboxProvider?: SandboxProviderType) => void; // Launch bash shell
   onCancel: () => void;
   onViewSessions?: () => void;
 }
@@ -202,7 +202,10 @@ export function PromptScreen({
         keybind: { key: 's', ctrl: true },
         hidden: true,
         onSelect: () =>
-          onShell(mountMode ? (mountDir ?? undefined) : undefined),
+          onShell(
+            mountMode ? (mountDir ?? undefined) : undefined,
+            sandboxProvider,
+          ),
       },
       {
         id: 'sessions.view',

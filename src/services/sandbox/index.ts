@@ -18,6 +18,7 @@ export type {
 } from './types.ts';
 
 import { readConfig } from '../config.ts';
+import { log } from '../logger.ts';
 import { CloudSandboxProvider } from './cloudProvider.ts';
 import { DockerSandboxProvider } from './dockerProvider.ts';
 import type {
@@ -53,4 +54,35 @@ export async function getDefaultProvider(): Promise<SandboxProvider> {
  */
 export function getProviderForSession(session: HermesSession): SandboxProvider {
   return getSandboxProvider(session.provider);
+}
+
+/**
+ * List sessions across all providers.
+ * Returns a single merged list, sorted by creation time descending.
+ */
+export async function listAllSessions(): Promise<HermesSession[]> {
+  const providers: SandboxProvider[] = [
+    getSandboxProvider('docker'),
+    getSandboxProvider('cloud'),
+  ];
+
+  const results = await Promise.allSettled(providers.map((p) => p.list()));
+  const sessions: HermesSession[] = [];
+
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      sessions.push(...result.value);
+    } else {
+      log.debug({ err: result.reason }, 'Failed to list sessions for provider');
+    }
+  }
+
+  sessions.sort((a, b) => {
+    const aTime = Date.parse(a.created);
+    const bTime = Date.parse(b.created);
+    if (Number.isNaN(aTime) || Number.isNaN(bTime)) return 0;
+    return bTime - aTime;
+  });
+
+  return sessions;
 }

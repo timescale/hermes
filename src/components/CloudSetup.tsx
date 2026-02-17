@@ -4,6 +4,7 @@
 
 import { useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { readConfig } from '../services/config';
 import {
   getDenoToken,
   setDenoToken,
@@ -78,15 +79,23 @@ export function CloudSetup({
 
   // Start snapshot check after token is validated
   const startSnapshotCheck = useCallback(
-    (token: string) => {
+    async (token: string) => {
       setState({ type: 'checking-snapshot' });
 
       if (buildingRef.current) return;
       buildingRef.current = true;
 
+      let region = DEFAULT_REGION;
+      try {
+        const config = await readConfig();
+        region = config.cloudRegion ?? DEFAULT_REGION;
+      } catch (err) {
+        log.debug({ err }, 'Failed to read config for cloud region');
+      }
+
       ensureCloudSnapshot({
         token,
-        region: DEFAULT_REGION,
+        region,
         onProgress: (progress: SnapshotBuildProgress) => {
           if (unmountedRef.current) return;
 
@@ -202,11 +211,6 @@ export function CloudSetup({
     const token = tokenInput.trim();
     if (!token) return;
 
-    log.info(
-      { tokenLength: token.length, prefix: token.slice(0, 4) },
-      'Submitting token for validation',
-    );
-
     setState({ type: 'validating-token', message: 'Validating token' });
 
     try {
@@ -238,6 +242,13 @@ export function CloudSetup({
       (state.type === 'need-token' || state.type === 'invalid-token')
     ) {
       handleTokenSubmit();
+    }
+    if (
+      key.name === 'backspace' &&
+      showBack &&
+      (state.type === 'need-token' || state.type === 'invalid-token')
+    ) {
+      onBack?.();
     }
   });
 

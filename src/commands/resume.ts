@@ -3,7 +3,11 @@
 // ============================================================================
 
 import { Command } from 'commander';
-import { getDefaultProvider } from '../services/sandbox';
+import {
+  getProviderForSession,
+  getSandboxProvider,
+  listAllSessions,
+} from '../services/sandbox';
 
 export async function resumeAction(
   containerId: string,
@@ -20,8 +24,7 @@ export async function resumeAction(
     process.exit(1);
   }
 
-  const provider = await getDefaultProvider();
-  const sessions = await provider.list();
+  const sessions = await listAllSessions();
   const resolvedSession = sessions.find(
     (session) => session.name === containerId,
   );
@@ -29,7 +32,19 @@ export async function resumeAction(
     (session) =>
       session.containerName === containerId || session.id === containerId,
   );
-  const targetId = resolvedSession?.id ?? fallbackSession?.id ?? containerId;
+  let targetSession = resolvedSession ?? fallbackSession;
+  if (!targetSession) {
+    for (const providerType of ['docker', 'cloud'] as const) {
+      const provider = getSandboxProvider(providerType);
+      const found = await provider.get(containerId);
+      if (found) {
+        targetSession = found;
+        break;
+      }
+    }
+  }
+  const targetId = targetSession?.id ?? containerId;
+  const provider = targetSession ? getProviderForSession(targetSession) : null;
 
   try {
     const mode = options.shell
@@ -37,6 +52,9 @@ export async function resumeAction(
       : options.detach
         ? 'detached'
         : 'interactive';
+    if (!provider) {
+      throw new Error(`Session not found: ${containerId}`);
+    }
     const result = await provider.resume(targetId, {
       mode,
       prompt,

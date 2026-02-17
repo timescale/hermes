@@ -4,7 +4,6 @@
 
 import type { Sandbox } from '@deno/sandbox';
 
-import packageJson from '../../../package.json' with { type: 'json' };
 import { runCloudSetupScreen } from '../../components/CloudSetup.tsx';
 import { enterSubprocessScreen, resetTerminal } from '../../utils.ts';
 import type { AgentType } from '../config.ts';
@@ -127,6 +126,9 @@ async function spawnShell(sandbox: Sandbox, command: string): Promise<void> {
       { command, exitCode: result.status.code, stderr },
       'Sandbox command failed',
     );
+    throw new Error(
+      `Sandbox command failed (exit ${result.status.code}): ${stderr || command}`,
+    );
   }
 }
 
@@ -244,7 +246,7 @@ export class CloudSandboxProvider implements SandboxProvider {
   async create(options: CreateSandboxOptions): Promise<HermesSession | null> {
     const client = await this.getClient();
     const region = await this.resolveRegion();
-    const baseSnapshot = `hermes-base-${packageJson.version}`;
+    const baseSnapshot = await this.ensureImage();
 
     // 1. Create session-specific volume for /work
     const volumeSlug = `hermes-session-${options.branchName}-${Date.now()}`;
@@ -355,7 +357,7 @@ export class CloudSandboxProvider implements SandboxProvider {
   async createShell(options: CreateShellSandboxOptions): Promise<void> {
     const client = await this.getClient();
     const region = await this.resolveRegion();
-    const baseSnapshot = `hermes-base-${packageJson.version}`;
+    const baseSnapshot = await this.ensureImage();
 
     const sandbox = await client.createSandbox({
       region: region as 'ord' | 'ams',
@@ -368,6 +370,7 @@ export class CloudSandboxProvider implements SandboxProvider {
     try {
       // Inject credentials
       await injectCredentials(sandbox);
+      await sandbox.sh`mkdir -p /work`;
 
       // Clone repo if available
       if (options.repoInfo && options.isGitRepo !== false) {
@@ -393,6 +396,7 @@ export class CloudSandboxProvider implements SandboxProvider {
   ): Promise<string> {
     const client = await this.getClient();
     const db = openSessionDb();
+    const baseSnapshot = await this.ensureImage();
 
     const existing = dbGetSession(db, sessionId);
     if (!existing?.snapshotSlug) {
@@ -420,7 +424,6 @@ export class CloudSandboxProvider implements SandboxProvider {
     });
 
     // 2. Boot new sandbox from base snapshot + resume volume
-    const baseSnapshot = `hermes-base-${packageJson.version}`;
     let sandbox: Sandbox;
     try {
       sandbox = await client.createSandbox({
@@ -562,33 +565,43 @@ export class CloudSandboxProvider implements SandboxProvider {
   async remove(sessionId: string): Promise<void> {
     const db = openSessionDb();
     const session = dbGetSession(db, sessionId);
+    const errors: string[] = [];
 
     try {
       const client = await this.getClient();
       // Kill sandbox if running
       try {
         await client.killSandbox(sessionId);
-      } catch {
-        // May already be dead
+      } catch (err) {
+        errors.push(`failed to kill sandbox: ${String(err)}`);
       }
       // Delete volume
       if (session?.volumeSlug) {
         try {
           await client.deleteVolume(session.volumeSlug);
-        } catch {
-          // Best-effort cleanup
+        } catch (err) {
+          errors.push(
+            `failed to delete volume ${session.volumeSlug}: ${String(err)}`,
+          );
         }
       }
       // Delete resume snapshot
       if (session?.snapshotSlug) {
         try {
           await client.deleteSnapshot(session.snapshotSlug);
-        } catch {
-          // Best-effort cleanup
+        } catch (err) {
+          errors.push(
+            `failed to delete snapshot ${session.snapshotSlug}: ${String(err)}`,
+          );
         }
       }
     } catch (err) {
-      log.debug({ err }, 'Failed to clean up cloud resources');
+      errors.push(`failed to initialize cloud cleanup: ${String(err)}`);
+    }
+
+    if (errors.length > 0) {
+      log.debug({ sessionId, errors }, 'Failed to clean up cloud resources');
+      throw new Error(errors.join('; '));
     }
 
     dbDeleteSession(db, sessionId);
@@ -597,6 +610,8 @@ export class CloudSandboxProvider implements SandboxProvider {
   async stop(sessionId: string): Promise<void> {
     const db = openSessionDb();
     const session = dbGetSession(db, sessionId);
+    const errors: string[] = [];
+    let stopped = false;
 
     try {
       const client = await this.getClient();
@@ -611,16 +626,23 @@ export class CloudSandboxProvider implements SandboxProvider {
           updateSessionSnapshot(db, sessionId, snapshotSlug);
         } catch (err) {
           log.warn({ err }, 'Failed to snapshot volume before stop');
+          errors.push(`failed to snapshot volume: ${String(err)}`);
         }
       }
 
       // Kill sandbox
       await client.killSandbox(sessionId);
+      stopped = true;
     } catch (err) {
-      log.debug({ err }, 'Failed to stop cloud sandbox');
+      errors.push(`failed to stop cloud sandbox: ${String(err)}`);
     }
 
-    updateSessionStatus(db, sessionId, 'stopped');
+    if (stopped) {
+      updateSessionStatus(db, sessionId, 'stopped');
+    }
+    if (errors.length > 0) {
+      throw new Error(errors.join('; '));
+    }
   }
 
   // --------------------------------------------------------------------------
