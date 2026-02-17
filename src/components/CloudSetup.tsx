@@ -309,7 +309,7 @@ export function CloudSetup({
               : 'Snapshot build failed. Please try again.'}
         </text>
         <text fg={theme.primary}>
-          Visit: https://dash.deno.com/account#access-tokens
+          Visit: https://console.deno.com (Settings {'>'} Organization tokens)
         </text>
         <text fg={theme.textMuted} marginTop={1}>
           Press Esc to exit
@@ -328,16 +328,14 @@ export function CloudSetup({
           <text fg={theme.error}>{state.message}</text>
         ) : (
           <text fg={theme.text}>
-            A Deno Deploy access token is required for cloud sandboxes.
+            A Deno Deploy organization token is required for cloud sandboxes.
           </text>
         )}
 
         <text fg={theme.textMuted} marginTop={1}>
-          Get a token at:{' '}
-          <span fg={theme.primary}>
-            https://dash.deno.com/account#access-tokens
-          </span>
+          Create one at your org Settings {'>'} Organization tokens:
         </text>
+        <text fg={theme.primary}>https://console.deno.com</text>
 
         <box marginTop={2} flexDirection="column">
           <text fg={theme.text}>Paste your token:</text>

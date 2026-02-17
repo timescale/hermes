@@ -37,12 +37,14 @@ export async function deleteDenoToken(): Promise<void> {
 
 /**
  * Validate a Deno Deploy token by attempting an API call.
- * Uses the REST API directly to avoid SDK dependency issues.
+ * Uses the sandbox list endpoint since that's what we actually need
+ * the token for, and it works with both personal (ddp_) and
+ * organization (ddo_) tokens.
  * Returns true if the token is valid.
  */
 export async function validateDenoToken(token: string): Promise<boolean> {
   try {
-    const response = await fetch('https://api.deno.com/v1/organizations', {
+    const response = await fetch('https://api.deno.com/v1/sandboxes', {
       headers: {
         Authorization: `Bearer ${token}`,
       },
