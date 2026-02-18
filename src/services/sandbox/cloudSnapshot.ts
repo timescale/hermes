@@ -301,7 +301,12 @@ export async function ensureCloudSnapshot(options: {
 bind -n C-\\\\ detach-client
 # Keep default prefix (ctrl+b) for other tmux commands
 set -g mouse on
-set -g default-terminal "screen-256color"
+# Hide status bar — hermes manages the session, no need for tmux chrome
+set -g status off
+# True-color support — xterm-256color + Tc flag enables 24-bit RGB
+# passthrough so TUI apps (OpenCode, Claude) render correctly
+set -g default-terminal "xterm-256color"
+set -ga terminal-overrides ",xterm-256color:Tc"
 TMUX_EOF`,
       'Configure tmux',
     );

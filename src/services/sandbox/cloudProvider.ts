@@ -134,6 +134,8 @@ async function sshIntoSandbox(
     'UserKnownHostsFile=/dev/null',
     '-o',
     'LogLevel=ERROR',
+    '-o',
+    'SetEnv=TERM=xterm-256color',
   ];
 
   // Build the remote command
