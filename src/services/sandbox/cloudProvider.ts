@@ -139,13 +139,14 @@ async function sshIntoSandbox(
   ];
 
   // Build the remote command
+  // -u forces UTF-8 mode so block/box-drawing characters render correctly
   let remoteCmd: string | undefined;
   if (tmux && command) {
     // Start agent inside a named tmux session (or attach if it already exists)
-    remoteCmd = `tmux new-session -A -s ${TMUX_SESSION} ${shellEscape(command)}`;
+    remoteCmd = `tmux -u new-session -A -s ${TMUX_SESSION} ${shellEscape(command)}`;
   } else if (tmux) {
     // Reattach to existing tmux session, or fall back to a shell
-    remoteCmd = `tmux attach -t ${TMUX_SESSION} 2>/dev/null || bash -l`;
+    remoteCmd = `tmux -u attach -t ${TMUX_SESSION} 2>/dev/null || bash -l`;
   } else if (command) {
     remoteCmd = command;
   }
