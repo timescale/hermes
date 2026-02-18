@@ -32,6 +32,13 @@ import type {
 } from './types.ts';
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+/** Name of the tmux session used for agent processes inside cloud sandboxes. */
+const TMUX_SESSION = 'hermes';
+
+// ============================================================================
 // Shell Helpers
 // ============================================================================
 
@@ -104,11 +111,19 @@ async function injectCredentials(sandbox: Sandbox): Promise<void> {
 
 /**
  * Expose SSH on a sandbox and run an interactive SSH session.
+ *
+ * @param options.command  Shell command to execute on the remote side.
+ * @param options.tmux     If true, wrap the command in a persistent tmux
+ *                         session so the agent survives SSH disconnects.
+ *                         ctrl+\ detaches (configured in ~/.tmux.conf).
+ *                         When reattaching (command omitted, tmux true),
+ *                         connects to the existing tmux session.
  */
 async function sshIntoSandbox(
   sandbox: Sandbox,
-  command?: string,
+  options?: { command?: string; tmux?: boolean },
 ): Promise<void> {
+  const { command, tmux } = options ?? {};
   const sshInfo = await sandbox.exposeSsh();
   enterSubprocessScreen();
   const sshArgs = [
@@ -120,14 +135,28 @@ async function sshIntoSandbox(
     '-o',
     'LogLevel=ERROR',
   ];
-  if (command) {
-    // Force PTY allocation — required for interactive agent TUIs
+
+  // Build the remote command
+  let remoteCmd: string | undefined;
+  if (tmux && command) {
+    // Start agent inside a named tmux session (or attach if it already exists)
+    remoteCmd = `tmux new-session -A -s ${TMUX_SESSION} ${shellEscape(command)}`;
+  } else if (tmux) {
+    // Reattach to existing tmux session, or fall back to a shell
+    remoteCmd = `tmux attach -t ${TMUX_SESSION} 2>/dev/null || bash -l`;
+  } else if (command) {
+    remoteCmd = command;
+  }
+
+  if (remoteCmd) {
+    // Force PTY allocation — required for interactive TUIs and tmux
     sshArgs.push('-t');
+    sshArgs.push(`${sshInfo.username}@${sshInfo.hostname}`);
+    sshArgs.push(remoteCmd);
+  } else {
+    sshArgs.push(`${sshInfo.username}@${sshInfo.hostname}`);
   }
-  sshArgs.push(`${sshInfo.username}@${sshInfo.hostname}`);
-  if (command) {
-    sshArgs.push(command);
-  }
+
   const proc = Bun.spawn(sshArgs, {
     stdio: ['inherit', 'inherit', 'inherit'],
   });
@@ -385,8 +414,11 @@ export class CloudSandboxProvider implements SandboxProvider {
       // 7. Start agent process
       const agentCommand = buildAgentCommand(options);
       if (options.interactive) {
-        // Interactive mode: SSH into sandbox and launch agent
-        await sshIntoSandbox(sandbox, `cd /work/app && ${agentCommand}`);
+        // Interactive mode: launch agent inside tmux for detach/reattach
+        await sshIntoSandbox(sandbox, {
+          command: `cd /work/app && ${agentCommand}`,
+          tmux: true,
+        });
       } else {
         // Detached mode: start agent in background (dynamic — contains pipes/redirects)
         await spawnShell(
@@ -572,7 +604,10 @@ export class CloudSandboxProvider implements SandboxProvider {
         } else {
           agentCmd = `opencode${modelArg}${extraArgs}`;
         }
-        await sshIntoSandbox(sandbox, `cd /work/app && ${agentCmd}`);
+        await sshIntoSandbox(sandbox, {
+          command: `cd /work/app && ${agentCmd}`,
+          tmux: true,
+        });
       } else {
         // Detached: run agent in background with continue flag
         let agentCmd: string;
@@ -755,15 +790,23 @@ export class CloudSandboxProvider implements SandboxProvider {
     if (!token) throw new Error('No Deno Deploy token available');
     const sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
     try {
-      await sshIntoSandbox(sandbox);
+      // Reattach to the tmux session where the agent is running
+      await sshIntoSandbox(sandbox, { tmux: true });
     } finally {
       await sandbox.close();
     }
   }
 
   async shell(sessionId: string): Promise<void> {
-    // Same as attach for cloud sandboxes
-    await this.attach(sessionId);
+    // Open a plain SSH shell (no tmux) for manual debugging
+    const token = await getDenoToken();
+    if (!token) throw new Error('No Deno Deploy token available');
+    const sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
+    try {
+      await sshIntoSandbox(sandbox);
+    } finally {
+      await sandbox.close();
+    }
   }
 
   // --------------------------------------------------------------------------

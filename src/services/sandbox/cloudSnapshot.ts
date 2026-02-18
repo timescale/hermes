@@ -211,11 +211,11 @@ export async function ensureCloudSnapshot(options: {
     onProgress?.({
       type: 'installing',
       message: 'Installing system packages',
-      detail: 'git, curl, ca-certificates, zip, unzip, tar, gzip, jq',
+      detail: 'git, curl, ca-certificates, zip, unzip, tar, gzip, jq, tmux',
     });
     await run(
       sandbox,
-      'DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates zip unzip tar gzip jq openssh-client',
+      'DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates zip unzip tar gzip jq openssh-client tmux',
       'Install system packages',
       { sudo: true },
     );
@@ -292,12 +292,26 @@ export async function ensureCloudSnapshot(options: {
       'Configure PATH in bashrc',
     );
 
-    // 11. Create /work directory for session data
+    // 11. Configure tmux for detach/reattach workflow
+    // ctrl+\ immediately detaches (matches Docker's --detach-keys=ctrl-\\)
+    await run(
+      sandbox,
+      `cat > ~/.tmux.conf << 'TMUX_EOF'
+# Detach with ctrl+\\ (no prefix needed) — matches Docker detach keys
+bind -n C-\\\\ detach-client
+# Keep default prefix (ctrl+b) for other tmux commands
+set -g mouse on
+set -g default-terminal "screen-256color"
+TMUX_EOF`,
+      'Configure tmux',
+    );
+
+    // 12. Create /work directory for session data
     await run(sandbox, 'mkdir -p /work', 'Create /work directory', {
       sudo: true,
     });
 
-    // 12. Kill sandbox to detach the volume (required before snapshotting)
+    // 13. Kill sandbox to detach the volume (required before snapshotting)
     onProgress?.({
       type: 'snapshotting',
       message: 'Detaching volume',
