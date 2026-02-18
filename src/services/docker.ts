@@ -22,6 +22,7 @@ import {
   resetTerminal,
   type ShellError,
 } from '../utils';
+import { buildAgentCommand } from './agentCommand';
 import { getClaudeConfigFiles } from './claude';
 import {
   type AgentType,
@@ -1100,31 +1101,6 @@ export interface ResumeSessionOptions {
   agentArgs?: string[];
 }
 
-function buildResumeAgentCommand(
-  agent: AgentType,
-  mode: ResumeSessionOptions['mode'],
-  model?: string,
-  agentArgs?: string[],
-): string {
-  const modelArg = model ? ` --model ${model}` : '';
-  const extraArgs = agentArgs?.length ? ` ${agentArgs.join(' ')}` : '';
-
-  if (agent === 'claude') {
-    const promptArg = mode === 'detached' ? ' -p' : '';
-    const hasPlanArgs = agentArgs?.includes('--permission-mode') ?? false;
-    const skipPermsFlag = hasPlanArgs
-      ? '--allow-dangerously-skip-permissions'
-      : '--dangerously-skip-permissions';
-    return `claude -c${promptArg}${extraArgs}${modelArg} ${skipPermsFlag}`;
-  }
-
-  if (mode === 'detached') {
-    return `opencode${modelArg}${extraArgs} run -c`;
-  }
-
-  return `opencode${modelArg}${extraArgs} -c`;
-}
-
 export async function resumeSession(
   nameOrId: string,
   options: ResumeSessionOptions,
@@ -1230,7 +1206,7 @@ exec bash
 set -e
 cd /work/app
 ${config.initScript || ''}
-${escapePrompt(buildResumeAgentCommand(agent, mode, model, options.agentArgs), prompt)}
+${escapePrompt(buildAgentCommand({ agent, mode: mode === 'detached' ? 'detached' : 'interactive', model, agentArgs: options.agentArgs, continue: true }), prompt)}
 `.trim();
 
   const hermesLabels = buildHermesLabels({
@@ -1414,29 +1390,20 @@ export async function startContainer(
 
   const volumeArgs = toVolumeArgs(volumes);
 
-  // Build the agent command based on the selected agent type, model, and mode
+  // Build the agent command based on the selected agent type, model, and mode.
+  // Prompt is NOT passed to the builder — Docker injects it via escapePrompt()
+  // which appends it as a positional arg (exec <cmd> "$HERMES_PROMPT").
   const hasPrompt = prompt.trim().length > 0;
-  const modelArg = model ? ` --model ${model}` : '';
-  const extraArgs = agentArgs?.length ? ` ${agentArgs.join(' ')}` : '';
-  let agentCommand: string;
-  if (agent === 'claude') {
-    const hasPlanArgs = agentArgs?.includes('--permission-mode') ?? false;
-    const skipPermsFlag = hasPlanArgs
-      ? '--allow-dangerously-skip-permissions'
-      : '--dangerously-skip-permissions';
-    const asyncFlag = !interactive ? ' -p' : '';
-    agentCommand = `claude${asyncFlag}${extraArgs}${modelArg} ${skipPermsFlag}`;
-  } else {
-    if (!interactive) {
-      // Async (detached) mode — always uses 'run' subcommand
-      agentCommand = `opencode${modelArg}${extraArgs} run`;
-    } else if (hasPrompt) {
-      // Interactive with prompt — use --prompt flag
-      agentCommand = `opencode${modelArg}${extraArgs} --prompt`;
-    } else {
-      // Interactive without prompt — just open opencode
-      agentCommand = `opencode${modelArg}${extraArgs}`;
-    }
+  let agentCommand = buildAgentCommand({
+    agent,
+    mode: interactive ? 'interactive' : 'detached',
+    model,
+    agentArgs,
+  });
+  // For interactive opencode with a prompt, append --prompt so that
+  // escapePrompt() produces: exec opencode --prompt "$HERMES_PROMPT"
+  if (agent === 'opencode' && interactive && hasPrompt) {
+    agentCommand += ' --prompt';
   }
 
   // Only add PR instructions in async mode (detached) with a git repo

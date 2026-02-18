@@ -5,6 +5,7 @@
 import type { Sandbox } from '@deno/sandbox';
 import { runCloudSetupScreen } from '../../components/CloudSetup.tsx';
 import { enterSubprocessScreen, resetTerminal } from '../../utils.ts';
+import { buildAgentCommand, buildContinueCommand } from '../agentCommand.ts';
 import type { AgentType } from '../config.ts';
 import { readConfig } from '../config.ts';
 import { ensureDenoToken, getDenoToken } from '../deno.ts';
@@ -48,44 +49,6 @@ function shellEscape(value: string): string {
 }
 
 // ============================================================================
-// Agent Command Builder
-// ============================================================================
-
-/**
- * Build the shell command string that starts an AI agent inside a sandbox.
- * Uses base64 encoding to safely pass the prompt through the shell.
- */
-function buildAgentCommand(options: CreateSandboxOptions): string {
-  const modelArg = options.model ? ` --model ${options.model}` : '';
-  const extraArgs = options.agentArgs?.length
-    ? ` ${options.agentArgs.join(' ')}`
-    : '';
-  const hasPrompt = options.prompt.trim().length > 0;
-
-  if (options.agent === 'claude') {
-    const hasPlanArgs =
-      options.agentArgs?.includes('--permission-mode') ?? false;
-    const skipPermsFlag = hasPlanArgs
-      ? '--allow-dangerously-skip-permissions'
-      : '--dangerously-skip-permissions';
-    const asyncFlag = !options.interactive ? ' -p' : '';
-    return hasPrompt
-      ? `echo '${Buffer.from(options.prompt).toString('base64')}' | base64 -d | claude${asyncFlag}${extraArgs}${modelArg} ${skipPermsFlag}`
-      : `claude${asyncFlag}${extraArgs}${modelArg} ${skipPermsFlag}`;
-  }
-
-  if (!options.interactive) {
-    return hasPrompt
-      ? `echo '${Buffer.from(options.prompt).toString('base64')}' | base64 -d | opencode${modelArg}${extraArgs} run`
-      : `opencode${modelArg}${extraArgs} run`;
-  }
-
-  return hasPrompt
-    ? `opencode${modelArg}${extraArgs} --prompt '${options.prompt.replace(/'/g, "'\\''")}'`
-    : `opencode${modelArg}${extraArgs}`;
-}
-
-// ============================================================================
 // Credential Injection
 // ============================================================================
 
@@ -121,9 +84,19 @@ async function injectCredentials(sandbox: Sandbox): Promise<void> {
  */
 async function sshIntoSandbox(
   sandbox: Sandbox,
-  options?: { command?: string; tmux?: boolean },
+  options?: {
+    command?: string;
+    tmux?: boolean;
+    /**
+     * Command to run when re-creating a dead tmux session.
+     * Used with `tmux: true` (no explicit `command`): if the named tmux
+     * session still exists we attach to it, otherwise we create a new
+     * one running this command.  Defaults to `bash -l`.
+     */
+    tmuxResumeCommand?: string;
+  },
 ): Promise<void> {
-  const { command, tmux } = options ?? {};
+  const { command, tmux, tmuxResumeCommand } = options ?? {};
   const sshInfo = await sandbox.exposeSsh();
   enterSubprocessScreen();
   const sshArgs = [
@@ -145,8 +118,11 @@ async function sshIntoSandbox(
     // Start agent inside a named tmux session (or attach if it already exists)
     remoteCmd = `tmux -u new-session -A -s ${TMUX_SESSION} ${shellEscape(command)}`;
   } else if (tmux) {
-    // Reattach to existing tmux session, or fall back to a shell
-    remoteCmd = `tmux -u attach -t ${TMUX_SESSION} 2>/dev/null || bash -l`;
+    // Attach to existing tmux session, or create a new one running the
+    // resume command (agent -c).  Uses new-session -A which attaches if
+    // the session exists, or creates it otherwise.
+    const resumeCmd = shellEscape(tmuxResumeCommand ?? 'bash -l');
+    remoteCmd = `tmux -u new-session -A -s ${TMUX_SESSION} -c /work/app ${resumeCmd}`;
   } else if (command) {
     remoteCmd = command;
   }
@@ -422,7 +398,13 @@ export class CloudSandboxProvider implements SandboxProvider {
 
       // 7. Start agent process
       onProgress?.('Starting agent');
-      const agentCommand = buildAgentCommand(options);
+      const agentCommand = buildAgentCommand({
+        agent: options.agent,
+        mode: options.interactive ? 'interactive' : 'detached',
+        model: options.model,
+        agentArgs: options.agentArgs,
+        prompt: options.prompt,
+      });
       if (options.interactive) {
         // Start agent inside a detached tmux session so it's ready for
         // the caller to attach via SSH later (provider.attach()).
@@ -624,53 +606,30 @@ export class CloudSandboxProvider implements SandboxProvider {
       onProgress?.('Setting up credentials');
       await injectCredentials(sandbox);
 
-      // 4. Build agent command with continue flag
+      // 4. Start agent with continue flag
       const agent = existing.agent as AgentType;
       const model = options.model ?? existing.model;
-      const modelArg = model ? ` --model ${model}` : '';
-      const extraArgs = options.agentArgs?.length
-        ? ` ${options.agentArgs.join(' ')}`
-        : '';
+      const isInteractive =
+        options.mode === 'interactive' || options.mode === 'shell';
 
-      if (options.mode === 'interactive' || options.mode === 'shell') {
+      onProgress?.('Starting agent');
+      const agentCmd = buildAgentCommand({
+        agent,
+        mode: isInteractive ? 'interactive' : 'detached',
+        model,
+        agentArgs: options.agentArgs,
+        continue: true,
+        prompt: isInteractive ? undefined : options.prompt,
+      });
+
+      if (isInteractive) {
         // Start agent inside a detached tmux session (caller attaches via SSH)
-        onProgress?.('Starting agent');
-        let agentCmd: string;
-        if (agent === 'claude') {
-          const hasPlanArgs =
-            options.agentArgs?.includes('--permission-mode') ?? false;
-          const skipPermsFlag = hasPlanArgs
-            ? '--allow-dangerously-skip-permissions'
-            : '--dangerously-skip-permissions';
-          agentCmd = `claude -c${extraArgs}${modelArg} ${skipPermsFlag}`;
-        } else {
-          agentCmd = `opencode${modelArg}${extraArgs}`;
-        }
         await spawnShell(
           sandbox,
           `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCmd)}`,
         );
       } else {
-        // Detached: run agent in background with continue flag
-        onProgress?.('Starting agent');
-        let agentCmd: string;
-        if (agent === 'claude') {
-          const hasPlanArgs =
-            options.agentArgs?.includes('--permission-mode') ?? false;
-          const skipPermsFlag = hasPlanArgs
-            ? '--allow-dangerously-skip-permissions'
-            : '--dangerously-skip-permissions';
-          const promptArg = ' -p';
-          agentCmd = `claude -c${promptArg}${extraArgs}${modelArg} ${skipPermsFlag}`;
-        } else {
-          agentCmd = `opencode${modelArg}${extraArgs} run -c`;
-        }
-
-        if (options.prompt) {
-          const b64 = Buffer.from(options.prompt).toString('base64');
-          agentCmd = `echo '${b64}' | base64 -d | ${agentCmd}`;
-        }
-
+        // Detached: run agent in background
         await spawnShell(
           sandbox,
           `cd /work/app && nohup ${agentCmd} > /work/agent.log 2>&1 &`,
@@ -824,10 +783,24 @@ export class CloudSandboxProvider implements SandboxProvider {
   async attach(sessionId: string): Promise<void> {
     const token = await getDenoToken();
     if (!token) throw new Error('No Deno Deploy token available');
+
+    // Look up session metadata so we can restart the agent if the tmux
+    // session has died (e.g. user pressed ctrl+c in the agent).
+    const db = openSessionDb();
+    const session = dbGetSession(db, sessionId);
+    const resumeCmd = session
+      ? buildContinueCommand(session.agent, session.model)
+      : undefined;
+
     const sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
     try {
-      // Reattach to the tmux session where the agent is running
-      await sshIntoSandbox(sandbox, { tmux: true });
+      // Reattach to the tmux session where the agent is running.
+      // If the tmux session is gone, a new one is created running the
+      // agent in continue mode so the user doesn't land in a bare shell.
+      await sshIntoSandbox(sandbox, {
+        tmux: true,
+        tmuxResumeCommand: resumeCmd,
+      });
     } finally {
       await sandbox.close();
     }
