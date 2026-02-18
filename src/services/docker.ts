@@ -1253,8 +1253,12 @@ ${escapePrompt(buildResumeAgentCommand(agent, mode, model, options.agentArgs), p
       cmdName: 'bash',
       cmdArgs: ['-c', resumeScript],
       dockerImage: resumeImage,
-      interactive: mode !== 'detached',
-      detached: mode === 'detached',
+      // Always start detached — the caller uses provider.attach() for
+      // interactive sessions.  allocateTty ensures the container has a
+      // TTY so `docker attach` works correctly later.
+      interactive: false,
+      detached: true,
+      allocateTty: mode !== 'detached',
       files,
       labels: hermesLabels,
     });
@@ -1341,7 +1345,7 @@ export const printArgs = (args: readonly string[]): string => {
 
 export async function startContainer(
   options: StartContainerOptions,
-): Promise<string | null> {
+): Promise<string> {
   const {
     branchName,
     prompt,
@@ -1513,13 +1517,17 @@ ${escapePrompt(agentCommand, fullPrompt)}
       ],
       cmdName: 'bash',
       cmdArgs: ['-c', startupScript],
-      interactive: !detach,
-      detached: detach,
+      // Always start detached — the caller uses provider.attach() for
+      // interactive sessions.  allocateTty ensures the container has a
+      // TTY so `docker attach` works correctly later.
+      interactive: false,
+      detached: true,
+      allocateTty: interactive,
       files,
       labels: hermesLabels,
     });
     await result.exited;
-    return detach ? result.text().trim() : null;
+    return containerName;
   } catch (error) {
     log.error({ error }, 'Error starting container');
     throw formatShellError(error as ShellError);

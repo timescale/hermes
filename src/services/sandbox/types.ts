@@ -51,6 +51,7 @@ export interface CreateSandboxOptions {
   agentArgs?: string[];
   initScript?: string;
   overlayMounts?: string[];
+  onProgress?: (step: string) => void;
 }
 
 // Options for creating a shell sandbox
@@ -67,6 +68,7 @@ export interface ResumeSandboxOptions {
   model?: string;
   mountDir?: string;
   agentArgs?: string[];
+  onProgress?: (step: string) => void;
 }
 
 // Container resource stats
@@ -104,10 +106,14 @@ export interface SandboxProvider {
     onProgress?: (progress: SandboxBuildProgress) => void;
   }): Promise<string>;
 
-  // Lifecycle
-  create(options: CreateSandboxOptions): Promise<HermesSession | null>;
+  // Lifecycle — create/resume always return a session (never attach internally).
+  // For interactive sessions, the caller should call attach() after create/resume.
+  create(options: CreateSandboxOptions): Promise<HermesSession>;
   createShell(options: CreateShellSandboxOptions): Promise<void>;
-  resume(sessionId: string, options: ResumeSandboxOptions): Promise<string>;
+  resume(
+    sessionId: string,
+    options: ResumeSandboxOptions,
+  ): Promise<HermesSession>;
 
   // Session management
   list(): Promise<HermesSession[]>;

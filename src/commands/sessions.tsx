@@ -108,20 +108,15 @@ interface SessionsResult {
   type:
     | 'quit'
     | 'attach'
+    | 'attach-session'
     | 'exec-shell'
-    | 'resume'
-    | 'start-interactive'
     | 'shell'
     | 'needs-agent-auth';
   sessionId?: string;
   // For attach/exec-shell: the session to return to after detaching
   session?: HermesSession;
-  // For resume: optional model override
-  resumeModel?: string;
-  // For resume: optional mount directory
-  resumeMountDir?: string;
-  // For resume: agent args (e.g., plan mode flags)
-  resumeAgentArgs?: string[];
+  // For attach-session: the provider type to use
+  attachProvider?: SandboxProviderType;
   // For shell: session ID if resuming, undefined if fresh shell
   resumeSessionId?: string;
   // Provider to use when resuming an existing session
@@ -132,18 +127,6 @@ interface SessionsResult {
   shellIsGitRepo?: boolean;
   // For shell: provider to use
   shellProvider?: SandboxProviderType;
-  // For start-interactive: info needed to start the container
-  startInfo?: {
-    prompt: string;
-    agent: AgentType;
-    model: string;
-    branchName: string;
-    envVars?: Record<string, string>;
-    mountDir?: string;
-    isGitRepo?: boolean;
-    agentArgs?: string[];
-    provider: SandboxProviderType;
-  };
   // For needs-agent-auth: info needed to retry after login
   authInfo?: {
     agent: AgentType;
@@ -432,31 +415,12 @@ function SessionsApp({
           );
         }
 
-        // For interactive/plan mode, exit TUI and let the caller start the container
-        if (mode === 'interactive' || mode === 'plan') {
-          onComplete({
-            type: 'start-interactive',
-            startInfo: {
-              prompt,
-              agent,
-              model,
-              branchName,
-              provider: activeProvider.type,
-              envVars: forkResult?.envVars,
-              mountDir,
-              isGitRepo: inGitRepo,
-              ...(isPlan
-                ? {
-                    agentArgs:
-                      agent === 'claude'
-                        ? ['--permission-mode', 'plan']
-                        : ['--agent', 'plan'],
-                  }
-                : {}),
-            },
-          });
-          return;
-        }
+        const isInteractive = mode === 'interactive' || mode === 'plan';
+        const agentArgs = isPlan
+          ? agent === 'claude'
+            ? ['--permission-mode', 'plan']
+            : ['--agent', 'plan']
+          : undefined;
 
         setView((v) =>
           v.type === 'starting'
@@ -475,17 +439,27 @@ function SessionsApp({
           repoInfo,
           agent,
           model,
-          detach: true,
-          interactive: false,
+          detach: !isInteractive,
+          interactive: isInteractive,
           envVars: forkResult?.envVars,
           mountDir,
           isGitRepo: inGitRepo,
+          agentArgs,
+          onProgress: (step) => {
+            setView((v) => (v.type === 'starting' ? { ...v, step } : v));
+          },
         });
 
-        if (session) {
-          setView({ type: 'detail', session });
+        if (isInteractive) {
+          // Exit TUI so the caller can attach to the interactive session
+          onComplete({
+            type: 'attach-session',
+            sessionId: session.id,
+            session,
+            attachProvider: activeProvider.type,
+          });
         } else {
-          throw new Error('Failed to find created session');
+          setView({ type: 'detail', session });
         }
       } catch (err) {
         log.error({ err }, 'Failed to start session');
@@ -549,65 +523,42 @@ function SessionsApp({
           mode,
         });
 
-        // For interactive/plan mode, exit TUI and let the caller resume the container
-        if (mode === 'interactive' || mode === 'plan') {
-          setView((v) =>
-            v.type === 'resuming'
-              ? { ...v, step: 'Starting interactive session' }
-              : v,
-          );
+        const isInteractive = mode === 'interactive' || mode === 'plan';
 
-          // Build agentArgs for plan mode
-          const agentArgs = isPlan
-            ? session.agent === 'claude'
-              ? ['--permission-mode', 'plan']
-              : ['--agent', 'plan']
-            : undefined;
+        // Build agentArgs for plan mode
+        const agentArgs = isPlan
+          ? session.agent === 'claude'
+            ? ['--permission-mode', 'plan']
+            : ['--agent', 'plan']
+          : undefined;
 
-          onComplete({
-            type: 'resume',
-            sessionId: session.id,
-            resumeModel: model,
-            resumeMountDir: mountDir,
-            resumeAgentArgs: agentArgs,
-            resumeProvider: session.provider,
-          });
-          return;
-        }
-
-        // Detached resume - create commit image and start new container
-        setView((v) =>
-          v.type === 'resuming'
-            ? { ...v, step: 'Creating session snapshot' }
-            : v,
-        );
-
-        // Small delay to ensure UI updates before the potentially slow operation
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        const resumeMode = isInteractive ? 'interactive' : 'detached';
 
         setView((v) =>
-          v.type === 'resuming'
-            ? { ...v, step: 'Starting resumed container' }
-            : v,
+          v.type === 'resuming' ? { ...v, step: 'Resuming session' } : v,
         );
 
-        const newId = await activeProvider.resume(session.id, {
-          mode: 'detached',
-          prompt,
+        const newSession = await activeProvider.resume(session.id, {
+          mode: resumeMode,
+          prompt: resumeMode === 'detached' ? prompt : undefined,
           model,
           mountDir,
+          agentArgs,
+          onProgress: (step) => {
+            setView((v) => (v.type === 'resuming' ? { ...v, step } : v));
+          },
         });
 
-        setView((v) =>
-          v.type === 'resuming' ? { ...v, step: 'Loading session' } : v,
-        );
-
-        // Fetch the newly created session and show its detail
-        const newSession = await activeProvider.get(newId);
-        if (newSession) {
-          setView({ type: 'detail', session: newSession });
+        if (isInteractive) {
+          // Exit TUI so the caller can attach to the interactive session
+          onComplete({
+            type: 'attach-session',
+            sessionId: newSession.id,
+            session: newSession,
+            attachProvider: activeProvider.type,
+          });
         } else {
-          setView({ type: 'list' });
+          setView({ type: 'detail', session: newSession });
         }
       } catch (err) {
         log.error({ err }, 'Failed to resume session');
@@ -1112,23 +1063,17 @@ export async function runSessionsTui({
       continue;
     }
 
-    if (result.type === 'resume' && result.sessionId) {
-      enterSubprocessScreen();
-      try {
-        const actionProvider = getSandboxProvider(
-          result.resumeProvider ?? provider.type,
-        );
-        await actionProvider.resume(result.sessionId, {
-          mode: 'interactive',
-          model: result.resumeModel,
-          mountDir: result.resumeMountDir,
-          agentArgs: result.resumeAgentArgs,
-        });
-      } catch (err) {
-        log.error({ err }, 'Failed to resume session');
-        console.error(`Failed to resume: ${err}`);
+    // Handle attach-session — attach to a newly created/resumed interactive session
+    if (result.type === 'attach-session' && result.sessionId) {
+      const actionProvider = getSandboxProvider(
+        result.attachProvider ?? provider.type,
+      );
+      await actionProvider.attach(result.sessionId);
+      // Return to the session detail view after detaching
+      if (result.session) {
+        nextView = 'detail';
+        nextSession = result.session;
       }
-      resetTerminal();
       continue;
     }
 
@@ -1161,45 +1106,6 @@ export async function runSessionsTui({
       } catch (err) {
         log.error({ err }, 'Failed to start shell');
         console.error(`Failed to start shell: ${err}`);
-      }
-      resetTerminal();
-      continue;
-    }
-
-    // Handle start-interactive action - start container attached to terminal
-    if (result.type === 'start-interactive' && result.startInfo) {
-      const {
-        prompt,
-        agent,
-        model,
-        branchName,
-        provider: startProvider,
-        envVars,
-        mountDir: startMountDir,
-        isGitRepo: startIsGitRepo = true,
-        agentArgs,
-      } = result.startInfo;
-      enterSubprocessScreen();
-      try {
-        const startRepoInfo = startIsGitRepo ? await getRepoInfo() : null;
-        const actionProvider = getSandboxProvider(startProvider);
-        await actionProvider.create({
-          branchName,
-          name: branchName,
-          prompt,
-          repoInfo: startRepoInfo,
-          agent,
-          model,
-          detach: false,
-          interactive: true,
-          envVars,
-          mountDir: startMountDir,
-          isGitRepo: startIsGitRepo,
-          agentArgs,
-        });
-      } catch (err) {
-        log.error({ err }, 'Failed to start session interactively');
-        console.error(`Failed to start: ${err}`);
       }
       resetTerminal();
       continue;

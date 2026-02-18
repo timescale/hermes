@@ -118,8 +118,10 @@ export class DockerSandboxProvider implements SandboxProvider {
     return ensureDockerImage({ onProgress: options?.onProgress });
   }
 
-  async create(options: CreateSandboxOptions): Promise<HermesSession | null> {
-    const result = await startContainer({
+  async create(options: CreateSandboxOptions): Promise<HermesSession> {
+    const { onProgress } = options;
+    onProgress?.('Starting container');
+    await startContainer({
       branchName: options.branchName,
       prompt: options.prompt,
       repoInfo: options.repoInfo,
@@ -133,12 +135,14 @@ export class DockerSandboxProvider implements SandboxProvider {
       agentArgs: options.agentArgs,
     });
 
-    if (!result) return null;
-
-    // Fetch the full session info for the detached container
+    // Fetch the full session info for the container
+    onProgress?.('Loading session');
     const containerName = `hermes-${options.branchName}`;
     const session = await dockerGetSession(containerName);
-    return session ? mapDockerSession(session) : null;
+    if (!session) {
+      throw new Error('Failed to find created Docker session');
+    }
+    return mapDockerSession(session);
   }
 
   async createShell(options: CreateShellSandboxOptions): Promise<void> {
@@ -152,8 +156,18 @@ export class DockerSandboxProvider implements SandboxProvider {
   async resume(
     sessionId: string,
     options: ResumeSandboxOptions,
-  ): Promise<string> {
-    return resumeSession(sessionId, options);
+  ): Promise<HermesSession> {
+    const { onProgress } = options;
+    onProgress?.('Resuming container');
+    const containerName = await resumeSession(sessionId, options);
+
+    // Fetch the full session info for the resumed container
+    onProgress?.('Loading session');
+    const session = await dockerGetSession(containerName);
+    if (!session) {
+      throw new Error('Failed to find resumed Docker session');
+    }
+    return mapDockerSession(session);
   }
 
   async list(): Promise<HermesSession[]> {

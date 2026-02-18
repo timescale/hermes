@@ -60,7 +60,12 @@ export async function resumeAction(
       prompt,
     });
     if (mode === 'detached') {
-      console.log(`Resumed container started: ${result.substring(0, 12)}`);
+      console.log(
+        `Resumed session started: ${result.name} (${result.id.substring(0, 12)})`,
+      );
+    } else {
+      // Interactive or shell mode — attach to the session
+      await provider.attach(result.id);
     }
   } catch (err) {
     console.error(`Failed to resume: ${err}`);

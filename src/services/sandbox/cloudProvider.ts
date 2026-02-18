@@ -330,17 +330,14 @@ export class CloudSandboxProvider implements SandboxProvider {
   // Lifecycle
   // --------------------------------------------------------------------------
 
-  async create(options: CreateSandboxOptions): Promise<HermesSession | null> {
+  async create(options: CreateSandboxOptions): Promise<HermesSession> {
+    const { onProgress } = options;
     const client = await this.getClient();
     const region = await this.resolveRegion();
     const baseSnapshot = await this.ensureImage();
 
     // 1. Create session-specific root volume from the base snapshot.
-    // Volumes created from snapshots are copy-on-write: they start with
-    // all the tools/config from the snapshot and only allocate space for
-    // new writes.  We must boot from a volume (not directly from a
-    // snapshot) because Deno's snapshot-boot uses a read-only overlay
-    // that does not expose the snapshot's installed packages.
+    onProgress?.('Creating volume');
     const volumeSlug = denoSlug('hs', options.branchName);
     const rootVolume = await client.createVolume({
       slug: volumeSlug,
@@ -353,6 +350,7 @@ export class CloudSandboxProvider implements SandboxProvider {
     const env: Record<string, string> = { ...options.envVars };
 
     // 3. Boot sandbox from the session volume
+    onProgress?.('Booting sandbox');
     let sandbox: ResolvedSandbox;
     try {
       sandbox = await client.createSandbox({
@@ -400,10 +398,12 @@ export class CloudSandboxProvider implements SandboxProvider {
 
     try {
       // 4. Inject credential files
+      onProgress?.('Setting up credentials');
       await injectCredentials(sandbox);
 
       // 5. Clone repo and create branch
       if (options.repoInfo && options.isGitRepo !== false) {
+        onProgress?.('Cloning repository');
         const fullName = options.repoInfo.fullName;
         const branchRef = `hermes/${options.branchName}`;
         await spawnShell(
@@ -416,19 +416,22 @@ export class CloudSandboxProvider implements SandboxProvider {
 
       // 6. Run init script if configured (dynamic — may contain shell syntax)
       if (options.initScript) {
+        onProgress?.('Running init script');
         await spawnShell(sandbox, `cd /work/app && ${options.initScript}`);
       }
 
       // 7. Start agent process
+      onProgress?.('Starting agent');
       const agentCommand = buildAgentCommand(options);
       if (options.interactive) {
-        // Interactive mode: launch agent inside tmux for detach/reattach
-        await sshIntoSandbox(sandbox, {
-          command: `cd /work/app && ${agentCommand}`,
-          tmux: true,
-        });
+        // Start agent inside a detached tmux session so it's ready for
+        // the caller to attach via SSH later (provider.attach()).
+        await spawnShell(
+          sandbox,
+          `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCommand)}`,
+        );
       } else {
-        // Detached mode: start agent in background (dynamic — contains pipes/redirects)
+        // Detached mode: start agent in background
         await spawnShell(
           sandbox,
           `cd /work/app && nohup ${agentCommand} > /work/agent.log 2>&1 &`,
@@ -465,7 +468,7 @@ export class CloudSandboxProvider implements SandboxProvider {
     const db = openSessionDb();
     upsertSession(db, session);
 
-    return options.interactive ? null : session;
+    return session;
   }
 
   async createShell(options: CreateShellSandboxOptions): Promise<void> {
@@ -525,7 +528,8 @@ export class CloudSandboxProvider implements SandboxProvider {
   async resume(
     sessionId: string,
     options: ResumeSandboxOptions,
-  ): Promise<string> {
+  ): Promise<HermesSession> {
+    const { onProgress } = options;
     const client = await this.getClient();
     const db = openSessionDb();
 
@@ -544,17 +548,14 @@ export class CloudSandboxProvider implements SandboxProvider {
         'Session region differs from current config region. Using session region.',
       );
     }
-    // Use session's original region for consistency (volumes/snapshots are regional)
     const region = existing.region ?? currentRegion;
 
     // 1. Determine the root volume to boot from.
-    //    Preferred: create a new volume from the resume snapshot (CoW).
-    //    Fallback:  boot directly from the session's existing volume
-    //    (available when stop() snapshot failed but the volume persists).
     let bootVolumeSlug: string;
     let createdNewVolume = false;
 
     if (existing.snapshotSlug) {
+      onProgress?.('Creating volume from snapshot');
       const resumeVolumeSlug = denoSlug('hr', existing.name);
       const resumeVolume = await client.createVolume({
         slug: resumeVolumeSlug,
@@ -565,7 +566,6 @@ export class CloudSandboxProvider implements SandboxProvider {
       bootVolumeSlug = resumeVolume.slug;
       createdNewVolume = true;
     } else {
-      // No snapshot — boot directly from the existing volume
       bootVolumeSlug = existing.volumeSlug as string;
       log.info(
         { volumeSlug: bootVolumeSlug },
@@ -573,7 +573,8 @@ export class CloudSandboxProvider implements SandboxProvider {
       );
     }
 
-    // 2. Boot new sandbox from the resume volume (contains tools + work data)
+    // 2. Boot new sandbox
+    onProgress?.('Booting sandbox');
     let sandbox: ResolvedSandbox;
     try {
       sandbox = await client.createSandbox({
@@ -589,7 +590,6 @@ export class CloudSandboxProvider implements SandboxProvider {
         },
       });
     } catch (err) {
-      // Clean up the orphaned volume (only if we created a new one)
       if (createdNewVolume) {
         try {
           await client.deleteVolume(bootVolumeSlug);
@@ -621,9 +621,10 @@ export class CloudSandboxProvider implements SandboxProvider {
 
     try {
       // 3. Inject fresh credentials
+      onProgress?.('Setting up credentials');
       await injectCredentials(sandbox);
 
-      // 4. Start agent with continue flag or open shell
+      // 4. Build agent command with continue flag
       const agent = existing.agent as AgentType;
       const model = options.model ?? existing.model;
       const modelArg = model ? ` --model ${model}` : '';
@@ -631,10 +632,9 @@ export class CloudSandboxProvider implements SandboxProvider {
         ? ` ${options.agentArgs.join(' ')}`
         : '';
 
-      if (options.mode === 'shell') {
-        await sshIntoSandbox(sandbox);
-      } else if (options.mode === 'interactive') {
-        // Interactive resume: launch agent with continue flag
+      if (options.mode === 'interactive' || options.mode === 'shell') {
+        // Start agent inside a detached tmux session (caller attaches via SSH)
+        onProgress?.('Starting agent');
         let agentCmd: string;
         if (agent === 'claude') {
           const hasPlanArgs =
@@ -646,12 +646,13 @@ export class CloudSandboxProvider implements SandboxProvider {
         } else {
           agentCmd = `opencode${modelArg}${extraArgs}`;
         }
-        await sshIntoSandbox(sandbox, {
-          command: `cd /work/app && ${agentCmd}`,
-          tmux: true,
-        });
+        await spawnShell(
+          sandbox,
+          `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCmd)}`,
+        );
       } else {
         // Detached: run agent in background with continue flag
+        onProgress?.('Starting agent');
         let agentCmd: string;
         if (agent === 'claude') {
           const hasPlanArgs =
@@ -670,7 +671,6 @@ export class CloudSandboxProvider implements SandboxProvider {
           agentCmd = `echo '${b64}' | base64 -d | ${agentCmd}`;
         }
 
-        // Dynamic command — contains pipes/redirects
         await spawnShell(
           sandbox,
           `cd /work/app && nohup ${agentCmd} > /work/agent.log 2>&1 &`,
@@ -699,7 +699,7 @@ export class CloudSandboxProvider implements SandboxProvider {
     };
     upsertSession(db, newSession);
 
-    return sandbox.resolvedId;
+    return newSession;
   }
 
   // --------------------------------------------------------------------------
