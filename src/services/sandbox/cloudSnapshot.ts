@@ -306,10 +306,17 @@ TMUX_EOF`,
       'Configure tmux',
     );
 
-    // 12. Create /work directory for session data
+    // 12. Create /work directory for session data, owned by the default user.
+    //     Two steps: mkdir as root, then chown as the app user (so $(id -u)
+    //     resolves to the correct non-root uid).
     await run(sandbox, 'mkdir -p /work', 'Create /work directory', {
       sudo: true,
     });
+    await run(
+      sandbox,
+      'sudo chown $(id -u):$(id -g) /work',
+      'Chown /work to app user',
+    );
 
     // 13. Kill sandbox to detach the volume (required before snapshotting)
     onProgress?.({

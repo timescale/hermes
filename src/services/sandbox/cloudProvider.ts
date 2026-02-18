@@ -332,26 +332,31 @@ export class CloudSandboxProvider implements SandboxProvider {
     const region = await this.resolveRegion();
     const baseSnapshot = await this.ensureImage();
 
-    // 1. Create session-specific volume for /work
+    // 1. Create session-specific root volume from the base snapshot.
+    // Volumes created from snapshots are copy-on-write: they start with
+    // all the tools/config from the snapshot and only allocate space for
+    // new writes.  We must boot from a volume (not directly from a
+    // snapshot) because Deno's snapshot-boot uses a read-only overlay
+    // that does not expose the snapshot's installed packages.
     const volumeSlug = denoSlug('hs', options.branchName);
-    const workVolume = await client.createVolume({
+    const rootVolume = await client.createVolume({
       slug: volumeSlug,
       region,
-      capacity: '5GiB',
+      capacity: '10GiB',
+      from: baseSnapshot,
     });
 
     // 2. Build env vars
     const env: Record<string, string> = { ...options.envVars };
 
-    // 3. Boot sandbox from base snapshot with work volume
+    // 3. Boot sandbox from the session volume
     let sandbox: ResolvedSandbox;
     try {
       sandbox = await client.createSandbox({
         region: region as 'ord' | 'ams',
-        root: baseSnapshot,
+        root: rootVolume.slug,
         timeout: '30m',
         memory: '2GiB',
-        volumes: { '/work': workVolume.slug },
         labels: {
           'hermes.managed': 'true',
           'hermes.name': options.branchName,
@@ -363,7 +368,7 @@ export class CloudSandboxProvider implements SandboxProvider {
     } catch (err) {
       // Clean up the orphaned volume
       try {
-        await client.deleteVolume(workVolume.id);
+        await client.deleteVolume(rootVolume.id);
       } catch (delErr) {
         log.debug(
           { err: delErr },
@@ -445,7 +450,7 @@ export class CloudSandboxProvider implements SandboxProvider {
       created: new Date().toISOString(),
       interactive: options.interactive,
       region,
-      volumeSlug: workVolume.slug,
+      volumeSlug: rootVolume.slug,
     };
 
     if (!session.id) {
@@ -465,9 +470,18 @@ export class CloudSandboxProvider implements SandboxProvider {
     const region = await this.resolveRegion();
     const baseSnapshot = await this.ensureImage();
 
+    // Create an ephemeral root volume from the base snapshot so installed
+    // tools are visible (snapshot-direct boot uses a read-only overlay).
+    const shellVolume = await client.createVolume({
+      slug: denoSlug('hsh'),
+      region,
+      capacity: '10GiB',
+      from: baseSnapshot,
+    });
+
     const sandbox = await client.createSandbox({
       region: region as 'ord' | 'ams',
-      root: baseSnapshot,
+      root: shellVolume.slug,
       timeout: '30m',
       memory: '2GiB',
       labels: { 'hermes.managed': 'true' },
@@ -496,6 +510,12 @@ export class CloudSandboxProvider implements SandboxProvider {
       } catch {
         // Best-effort cleanup
       }
+      // Clean up ephemeral volume
+      try {
+        await client.deleteVolume(shellVolume.id);
+      } catch {
+        // Best-effort cleanup
+      }
     }
   }
 
@@ -505,7 +525,6 @@ export class CloudSandboxProvider implements SandboxProvider {
   ): Promise<string> {
     const client = await this.getClient();
     const db = openSessionDb();
-    const baseSnapshot = await this.ensureImage();
 
     const existing = dbGetSession(db, sessionId);
     if (!existing?.snapshotSlug) {
@@ -523,24 +542,26 @@ export class CloudSandboxProvider implements SandboxProvider {
     // Use session's original region for consistency (volumes/snapshots are regional)
     const region = existing.region ?? currentRegion;
 
-    // 1. Create new volume from resume snapshot
+    // 1. Create a root volume from the resume snapshot.
+    //    The resume snapshot captures the full root filesystem (including
+    //    /work/app with the cloned repo and any agent changes) so we only
+    //    need a single volume — no separate /work mount.
     const resumeVolumeSlug = denoSlug('hr', existing.name);
     const resumeVolume = await client.createVolume({
       slug: resumeVolumeSlug,
       region,
       from: existing.snapshotSlug,
-      capacity: '5GiB',
+      capacity: '10GiB',
     });
 
-    // 2. Boot new sandbox from base snapshot + resume volume
+    // 2. Boot new sandbox from the resume volume (contains tools + work data)
     let sandbox: ResolvedSandbox;
     try {
       sandbox = await client.createSandbox({
         region: region as 'ord' | 'ams',
-        root: baseSnapshot,
+        root: resumeVolume.slug,
         timeout: '30m',
         memory: '2GiB',
-        volumes: { '/work': resumeVolume.slug },
         labels: {
           'hermes.managed': 'true',
           'hermes.name': existing.name,

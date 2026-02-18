@@ -38,22 +38,43 @@ export async function deleteDenoToken(): Promise<void> {
 }
 
 /**
+ * Result of a token validation attempt.
+ * - 'valid':   API call succeeded — token is good.
+ * - 'invalid': API returned 401/403 — token is bad or expired.
+ * - 'error':   Transient/server error (5xx, network) — can't tell.
+ */
+export type TokenValidationResult = 'valid' | 'invalid' | 'error';
+
+/**
  * Validate a Deno Deploy token by attempting an API call.
  * Uses the SDK's Client to list sandboxes since that's what we actually
  * need the token for, and it works with both personal (ddp_) and
  * organization (ddo_) tokens.
- * Returns true if the token is valid.
+ *
+ * Distinguishes between auth failures (invalid token) and transient
+ * server errors (API down) so callers can decide how to handle each.
  */
-export async function validateDenoToken(token: string): Promise<boolean> {
+export async function validateDenoToken(
+  token: string,
+): Promise<TokenValidationResult> {
   const masked = token.length > 8 ? `${token.slice(0, 8)}...` : '***';
   try {
     const client = new Client({ token });
     await client.sandboxes.list();
     log.debug({ token: masked }, 'Deno Deploy token is valid');
-    return true;
+    return 'valid';
   } catch (err) {
-    log.info({ err, token: masked }, 'Failed to validate Deno Deploy token');
-    return false;
+    const status = (err as { status?: number })?.status;
+    if (status === 401 || status === 403) {
+      log.info({ token: masked, status }, 'Deno Deploy token is invalid');
+      return 'invalid';
+    }
+    // Server error, network issue, etc. — token might be fine
+    log.info(
+      { err, token: masked },
+      'Could not validate Deno Deploy token (API error)',
+    );
+    return 'error';
   }
 }
 
@@ -62,6 +83,10 @@ export async function validateDenoToken(token: string): Promise<boolean> {
  * Returns the token if found and valid, null otherwise.
  * Does NOT prompt -- callers should handle the missing token case
  * (e.g., by showing the CloudSetup TUI).
+ *
+ * On transient API errors the token is assumed valid (it exists in the
+ * keyring) so the app can proceed.  Actual auth failures will surface
+ * later when the token is used.
  */
 export async function ensureDenoToken(): Promise<string | null> {
   const token = await getDenoToken();
@@ -70,10 +95,15 @@ export async function ensureDenoToken(): Promise<string | null> {
     return null;
   }
 
-  const valid = await validateDenoToken(token);
-  if (!valid) {
+  const result = await validateDenoToken(token);
+  if (result === 'invalid') {
     log.warn('Deno Deploy token in keyring is invalid or expired');
     return null;
+  }
+  if (result === 'error') {
+    log.warn(
+      'Could not verify Deno Deploy token (API unavailable) — assuming valid',
+    );
   }
 
   return token;

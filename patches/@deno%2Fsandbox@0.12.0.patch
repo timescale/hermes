@@ -1,173 +1,198 @@
 diff --git a/node_modules/@deno/sandbox/.bun-tag-1542d780850fb00a b/.bun-tag-1542d780850fb00a
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@deno/sandbox/.bun-tag-94ae5fdf64f831c8 b/.bun-tag-94ae5fdf64f831c8
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/esm/transport.js b/esm/transport.js
-index fb16fcef772172196761b1e7eea7e1363f50895f..6f7e4bf16df698de15a32d65dc76de3eb5bf544c 100644
+index fb16fcef772172196761b1e7eea7e1363f50895f..704d3588f92295f6bc1d34015c7ed5956241f436 100644
 --- a/esm/transport.js
 +++ b/esm/transport.js
-@@ -1,5 +1,11 @@
+@@ -1,6 +1,16 @@
  // Copyright 2025-2026 the Deno authors. MIT license.
-+// Patched for Bun compatibility: two-phase WebSocket transport.
-+// Bun's ws polyfill doesn't implement "upgrade" or "unexpected-response" events.
-+// Phase 1: HTTP probe via node:https to get sandbox ID + handle non-101 errors.
-+// Phase 2: ws.WebSocket to the connect endpoint for JSON-RPC messaging.
++// Patched for Bun compatibility: raw TLS WebSocket transport.
++//
++// Bun's native WebSocket (used as the ws polyfill) does NOT forward custom
++// HTTP headers (Authorization) on the upgrade request. Additionally, Bun's
++// node:https does NOT forward data on res.socket after a 101 upgrade.
++//
++// This patch uses node:tls to create a raw TLS connection, sends the HTTP
++// upgrade request manually, parses the 101 response, and then speaks the
++// WebSocket wire protocol directly over the raw TLS socket.
  import { Buffer } from "node:buffer";
-+import https from "node:https";
+-import WebSocket from "ws";
++import tls from "node:tls";
 +import crypto from "node:crypto";
- import WebSocket from "ws";
  import { maybeHandleDenoProcessMessage } from "./deno.js";
  import { ConnectionClosedError, ConnectionEstablishmentError, RpcError } from "./errors.js";
-@@ -80,76 +86,152 @@ export function rpcClient(transport) {
+ import { jsonRpcMessageSchema, WEBSOCKET_STATUS, } from "./proto.js";
+@@ -80,183 +90,417 @@ export function rpcClient(transport) {
          },
      });
  }
 -export function websocketTransport(options) {
-+
-+/**
-+ * Bun-compatible probe: performs an HTTP upgrade request to the sandbox API
-+ * endpoint. Returns the sandbox ID from response headers on success (101).
-+ * Throws ConnectionEstablishmentError on non-101 responses.
-+ *
-+ * After extracting headers, the raw socket is destroyed — it is NOT used
-+ * for WebSocket framing. A separate ws.WebSocket connection handles RPC.
-+ */
-+function bunProbeUpgrade(wsUrl, headers) {
-+    return new Promise((resolve, reject) => {
-+        // Convert ws:// / wss:// back to http:// / https://
-+        const httpUrl = new URL(wsUrl.replace(/^ws/, "http"));
-+        const isSecure = httpUrl.protocol === "https:";
-+
-+        const wsKey = crypto.randomBytes(16).toString("base64");
-+        const reqHeaders = {
-+            ...headers,
-+            "Connection": "Upgrade",
-+            "Upgrade": "websocket",
-+            "Sec-WebSocket-Key": wsKey,
-+            "Sec-WebSocket-Version": "13",
-+        };
-+
-+        // Always use https — the Deno sandbox API is always HTTPS.
-+        const req = https.request({
-+            hostname: httpUrl.hostname,
-+            port: httpUrl.port || (isSecure ? 443 : 80),
-+            path: httpUrl.pathname + httpUrl.search,
-+            method: "GET",
-+            headers: reqHeaders,
-+        });
-+
-+        let settled = false;
-+
-+        // In Bun, 101 responses come through the "response" callback
-+        // (not the "upgrade" event). Non-101 also come here.
-+        req.on("response", (res) => {
-+            if (settled) return;
-+            const status = res.statusCode;
-+
-+            if (status === 101) {
-+                // Success — extract sandbox ID and close
-+                const sandboxId = res.headers["x-deno-sandbox-id"] || null;
-+                const traceId = res.headers["x-deno-trace-id"] || null;
-+                settled = true;
-+                // Destroy the socket — we don't use it for WS framing
-+                if (res.socket) res.socket.destroy();
-+                res.destroy();
-+                resolve({ sandboxId, traceId });
-+                return;
-+            }
-+
-+            // Non-101: read the error body
-+            const chunks = [];
-+            res.on("data", (chunk) => chunks.push(chunk));
-+            res.on("end", () => {
-+                if (settled) return;
-+                settled = true;
-+                const body = Buffer.concat(chunks).toString("utf8");
-+                const traceId = res.headers["x-deno-trace-id"];
-+                try {
-+                    const json = JSON.parse(body);
-+                    reject(new ConnectionEstablishmentError(status, json.code, json.message, traceId));
-+                } catch {
-+                    reject(new ConnectionEstablishmentError(status, "UNKNOWN", body || `HTTP ${status}`, traceId));
-+                }
-+            });
-+        });
-+
-+        // The "upgrade" event may fire on Node.js (not Bun). Handle it too
-+        // for forward-compatibility if Bun adds support later.
-+        req.on("upgrade", (res, socket) => {
-+            if (settled) return;
-+            settled = true;
-+            const sandboxId = res.headers["x-deno-sandbox-id"] || null;
-+            const traceId = res.headers["x-deno-trace-id"] || null;
-+            socket.destroy();
-+            resolve({ sandboxId, traceId });
-+        });
-+
-+        req.on("error", (err) => {
-+            if (settled) return;
-+            settled = true;
-+            reject(err);
-+        });
-+
-+        // Timeout after 30 seconds
-+        req.setTimeout(30000, () => {
-+            if (settled) return;
-+            settled = true;
-+            req.destroy();
-+            reject(new Error("Probe request timed out"));
-+        });
-+
-+        req.end();
-+    });
-+}
-+
-+/**
-+ * Create the RPC WebSocket connection using ws.WebSocket.
-+ * This is used for the second phase — after the probe has succeeded.
-+ * The endpoint should be a connect URL (not create).
-+ */
-+function createRpcWebSocket(endpoint, headers, sandboxId, options) {
-     const pendingRequests = new Map();
+-    const pendingRequests = new Map();
 -    const headers = {
 -        "authorization": `Bearer ${options.token}`,
 -    };
 -    if (options.config) {
 -        headers["x-deno-sandbox-config"] = btoa(JSON.stringify(options.config));
--    }
++
++// ---------------------------------------------------------------------------
++// Minimal WebSocket frame helpers (RFC 6455) — just enough for JSON-RPC text
++// messages + ping/pong.  We use raw TLS sockets with manual HTTP upgrade and
++// WebSocket framing because Bun's ws polyfill and node:https don't properly
++// support custom headers or post-upgrade data events.
++// ---------------------------------------------------------------------------
++
++/**
++ * Encode a UTF-8 text payload into a masked WebSocket frame (opcode 0x01).
++ * Client frames MUST be masked per RFC 6455 §5.1.
++ */
++function encodeTextFrame(text) {
++    const payload = Buffer.from(text, "utf8");
++    const len = payload.length;
++
++    // Header: FIN=1 + opcode 0x01, then MASK bit + length
++    let headerLen;
++    if (len < 126) headerLen = 2;
++    else if (len < 65536) headerLen = 4;
++    else headerLen = 10;
++
++    const frame = Buffer.alloc(headerLen + 4 + len); // +4 for mask key
++    frame[0] = 0x81; // FIN + text opcode
++
++    if (len < 126) {
++        frame[1] = 0x80 | len; // MASK bit set
++    } else if (len < 65536) {
++        frame[1] = 0x80 | 126;
++        frame.writeUInt16BE(len, 2);
++    } else {
++        frame[1] = 0x80 | 127;
++        // Write 64-bit length (high 32 bits then low 32 bits)
++        frame.writeUInt32BE(0, 2);
++        frame.writeUInt32BE(len, 6);
+     }
 -    if (options.org) {
 -        headers["X-Deno-Org"] = options.org;
--    }
++
++    // Generate mask key and apply
++    const maskOffset = headerLen;
++    const mask = crypto.randomBytes(4);
++    mask.copy(frame, maskOffset);
++    for (let i = 0; i < len; i++) {
++        frame[maskOffset + 4 + i] = payload[i] ^ mask[i & 3];
+     }
 -    // NOTE: This WebSocket is from `npm:ws` and not the standard Web API in order
 -    // to send http headers in the initial request.
 -    const ws = new WebSocket(options.endpoint, [], { headers });
++    return frame;
++}
 +
-+    const ws = new WebSocket(endpoint, [], { headers });
++/**
++ * Encode a WebSocket close frame with a status code + optional reason.
++ */
++function encodeCloseFrame(code, reason) {
++    const reasonBuf = reason ? Buffer.from(reason, "utf8") : Buffer.alloc(0);
++    const payload = Buffer.alloc(2 + reasonBuf.length);
++    payload.writeUInt16BE(code, 0);
++    if (reasonBuf.length) reasonBuf.copy(payload, 2);
++
++    const frame = Buffer.alloc(2 + 4 + payload.length);
++    frame[0] = 0x88; // FIN + close opcode
++    frame[1] = 0x80 | payload.length;
++    const mask = crypto.randomBytes(4);
++    mask.copy(frame, 2);
++    for (let i = 0; i < payload.length; i++) {
++        frame[2 + 4 + i] = payload[i] ^ mask[i & 3];
++    }
++    return frame;
++}
++
++/**
++ * Incremental WebSocket frame parser. Feed it chunks of data from the socket
++ * and it will emit decoded frames via the callback.
++ *
++ * Handles: text (0x01), close (0x08), ping (0x09), pong (0x0A).
++ * Does NOT handle fragmented messages (not needed for Deno sandbox JSON-RPC).
++ */
++function createFrameParser(onFrame) {
++    let buffer = Buffer.alloc(0);
++
++    return function feed(chunk) {
++        buffer = Buffer.concat([buffer, chunk]);
++
++        while (true) {
++            if (buffer.length < 2) return;
++
++            const byte0 = buffer[0];
++            const byte1 = buffer[1];
++            const opcode = byte0 & 0x0f;
++            const masked = (byte1 & 0x80) !== 0;
++            let payloadLen = byte1 & 0x7f;
++            let offset = 2;
++
++            if (payloadLen === 126) {
++                if (buffer.length < 4) return;
++                payloadLen = buffer.readUInt16BE(2);
++                offset = 4;
++            } else if (payloadLen === 127) {
++                if (buffer.length < 10) return;
++                // Read as two 32-bit values
++                payloadLen = buffer.readUInt32BE(2) * 0x100000000 + buffer.readUInt32BE(6);
++                offset = 10;
++            }
++
++            if (masked) offset += 4; // mask key
++            if (buffer.length < offset + payloadLen) return;
++
++            let payload = buffer.subarray(offset, offset + payloadLen);
++            if (masked) {
++                const maskKey = buffer.subarray(offset - 4, offset);
++                payload = Buffer.from(payload); // copy
++                for (let i = 0; i < payload.length; i++) {
++                    payload[i] ^= maskKey[i & 3];
++                }
++            }
++
++            buffer = buffer.subarray(offset + payloadLen);
++            onFrame(opcode, payload);
++        }
++    };
++}
++
++/**
++ * Create the JSON-RPC transport using a raw TLS connection with manual HTTP
++ * upgrade and WebSocket framing.
++ *
++ * This bypasses both Bun's native WebSocket and node:https entirely:
++ * - tls.connect() gives us a raw duplex TLS socket
++ * - We write the HTTP upgrade request manually
++ * - We parse the HTTP 101 response to extract the sandbox ID
++ * - We then speak WebSocket wire protocol over the same socket
++ *
++ * This is necessary because:
++ * 1. Bun's ws polyfill doesn't forward custom headers (Authorization)
++ * 2. Bun's node:https doesn't emit data events on res.socket after 101
++ */
++function createRpcWebSocket(endpoint, headers, sandboxId, options) {
++    const pendingRequests = new Map();
      const wsReady = Promise.withResolvers();
      wsReady.promise.catch(() => { });
      const wsClosed = Promise.withResolvers();
      wsClosed.promise.catch(() => { });
      let closed = false;
      let error = null;
-+
-     ws.on("error", (e) => {
+-    ws.on("error", (e) => {
 -        if (error)
 -            return;
-+        if (error) return;
-         error = e;
+-        error = e;
 -        console.error("WebSocket error:", e);
-+        // Don't log "Expected 101" errors to console — the probe already
-+        // handled error detection. This error is from Bun's ws polyfill
-+        // failing on a non-101 response, which shouldn't happen since
-+        // we already probed successfully.
-+        const msg = e?.message || String(e);
-+        if (!msg.includes("Expected 101")) {
-+            console.error("WebSocket error:", e);
-+        }
-         options.onError?.(error);
-         wsReady.reject(error);
-         wsClosed.reject(error);
-         closed = true;
-     });
+-        options.onError?.(error);
+-        wsReady.reject(error);
+-        wsClosed.reject(error);
+-        closed = true;
+-    });
 -    ws.on("unexpected-response", (_req, resp) => {
 -        const status = resp.statusCode;
 -        const traceId = resp.headers["x-deno-trace-id"];
@@ -200,102 +225,287 @@ index fb16fcef772172196761b1e7eea7e1363f50895f..6f7e4bf16df698de15a32d65dc76de3e
 -            console.log("trace ID:", resp.headers["x-deno-trace-id"] || "n/a");
 -        }
 -    });
-+
-+    // NOTE: "unexpected-response" and "upgrade" events are NOT registered here
-+    // because they don't fire in Bun (and registering them triggers noisy
-+    // warnings). Both cases are handled by the probe phase instead.
-+
++    let socket = null;
      let pingInterval = null;
-     ws.on("open", () => {
-+        // Use the sandboxId from the probe (or updated by upgrade event)
-         options.onReady?.(sandboxId);
-         wsReady.resolve();
-         pingInterval = setInterval(() => {
-             ws.send("ping");
-         }, 2000);
-     });
+-    ws.on("open", () => {
+-        options.onReady?.(sandboxId);
+-        wsReady.resolve();
+-        pingInterval = setInterval(() => {
+-            ws.send("ping");
+-        }, 2000);
+-    });
+-    ws.on("message", (rawData) => {
+-        const data = rawData.toString("utf8");
+-        if (data === "pong") {
+-            return;
 +
-     ws.on("message", (rawData) => {
-         const data = rawData.toString("utf8");
-         if (data === "pong") {
-@@ -159,8 +241,8 @@ export function websocketTransport(options) {
++    function wsSend(text) {
++        if (socket && !socket.destroyed) {
++            socket.write(encodeTextFrame(text));
+         }
++    }
++
++    function wsClose(code, reason) {
++        if (socket && !socket.destroyed) {
++            socket.write(encodeCloseFrame(code || 1000, reason || ""));
++            socket.end();
++        }
++    }
++
++    function handleMessage(data) {
++        if (data === "pong") return;
++
+         let parsed;
          try {
              parsed = JSON.parse(data);
-         }
+-        }
 -        catch (error) {
 -            console.error({ msg: "Failed to parse WebSocket message", error, data });
-+        catch (parseErr) {
+-            ws.close(WEBSOCKET_STATUS.INVALID_JSON, "Invalid JSON");
++        } catch (parseErr) {
 +            console.error({ msg: "Failed to parse WebSocket message", error: parseErr, data });
-             ws.close(WEBSOCKET_STATUS.INVALID_JSON, "Invalid JSON");
++            wsClose(WEBSOCKET_STATUS.INVALID_JSON, "Invalid JSON");
              return;
          }
-@@ -168,16 +250,20 @@ export function websocketTransport(options) {
++
+         let message;
          try {
              message = jsonRpcMessageSchema.parse(parsed);
-         }
+-        }
 -        catch (error) {
-+        catch (rpcErr) {
-             console.error({
-                 msg: "Failed to parse JSON-RPC message",
+-            console.error({
+-                msg: "Failed to parse JSON-RPC message",
 -                error,
-+                error: rpcErr,
-                 data: parsed,
-             });
-             ws.close(WEBSOCKET_STATUS.INVALID_JSON_RPC, "Invalid message");
+-                data: parsed,
+-            });
+-            ws.close(WEBSOCKET_STATUS.INVALID_JSON_RPC, "Invalid message");
++        } catch (rpcErr) {
++            console.error({ msg: "Failed to parse JSON-RPC message", error: rpcErr, data: parsed });
++            wsClose(WEBSOCKET_STATUS.INVALID_JSON_RPC, "Invalid message");
              return;
          }
++
          if (!("id" in message)) {
-+            const notify = (notification) => {
+-            if (maybeHandleStreamMessage(message, { notify }))
+-                return;
+-            if (maybeHandleDenoProcessMessage(message))
+-                return;
+-            console.error("Unknown notification method:", message.method);
++            const notifyFn = (notification) => {
 +                if (closed) throw new ConnectionClosedError();
-+                ws.send(JSON.stringify(notification));
++                wsSend(JSON.stringify(notification));
 +            };
-             if (maybeHandleStreamMessage(message, { notify }))
-                 return;
-             if (maybeHandleDenoProcessMessage(message))
-@@ -187,7 +273,6 @@ export function websocketTransport(options) {
-         }
-         const pending = pendingRequests.get(message.id);
-         if (!pending) {
--            // This response was already handled
++            if (maybeHandleStreamMessage(message, { notify: notifyFn })) return;
++            if (maybeHandleDenoProcessMessage(message)) return;
              return;
          }
-         if (!("result" in message || "error" in message)) {
-@@ -202,17 +287,16 @@ export function websocketTransport(options) {
++
+         const pending = pendingRequests.get(message.id);
+-        if (!pending) {
+-            // This response was already handled
+-            return;
+-        }
+-        if (!("result" in message || "error" in message)) {
+-            console.error("Received JSON-RPC request:", message);
+-            return;
+-        }
++        if (!pending) return;
++        if (!("result" in message || "error" in message)) return;
+         pendingRequests.delete(message.id);
+         if ("error" in message) {
+             pending.reject(new RpcError(message.error.code, message.error.message, message.error.data));
+-        }
+-        else {
++        } else {
              pending.resolve(message);
          }
-     });
++    }
 +
-     ws.on("close", (code, reason) => {
-         const reasonStr = reason.toString("utf8");
-         if (options.debug) {
-             if (code === WEBSOCKET_STATUS.NORMAL_CLOSURE ||
-                 code === WEBSOCKET_STATUS.GOING_AWAY ||
-                 code === WEBSOCKET_STATUS.NO_STATUS_RECEIVED) {
++    // Parse the endpoint URL
++    const httpUrl = new URL(endpoint.replace(/^ws/, "http"));
++    const hostname = httpUrl.hostname;
++    const port = parseInt(httpUrl.port || "443", 10);
++    const path = httpUrl.pathname + httpUrl.search;
++
++    // Build the HTTP upgrade request
++    const wsKey = crypto.randomBytes(16).toString("base64");
++    const headerLines = [
++        `GET ${path} HTTP/1.1`,
++        `Host: ${hostname}`,
++    ];
++    for (const [key, value] of Object.entries(headers)) {
++        headerLines.push(`${key}: ${value}`);
++    }
++    headerLines.push(
++        "Upgrade: websocket",
++        "Connection: Upgrade",
++        `Sec-WebSocket-Key: ${wsKey}`,
++        "Sec-WebSocket-Version: 13",
++        "",
++        "",
++    );
++    const httpRequest = headerLines.join("\r\n");
++
++    // Connect via raw TLS
++    const tlsSocket = tls.connect({ host: hostname, port, servername: hostname }, () => {
++        // TLS handshake complete — send the HTTP upgrade request
++        tlsSocket.write(httpRequest);
+     });
+-    ws.on("close", (code, reason) => {
+-        const reasonStr = reason.toString("utf8");
+-        if (options.debug) {
+-            if (code === WEBSOCKET_STATUS.NORMAL_CLOSURE ||
+-                code === WEBSOCKET_STATUS.GOING_AWAY ||
+-                code === WEBSOCKET_STATUS.NO_STATUS_RECEIVED) {
 -                // Expected closure (including sandbox timeout)
-                 console.log(`Sandbox connection closed: ${reasonStr || "server going away"}`);
-             }
-             else {
+-                console.log(`Sandbox connection closed: ${reasonStr || "server going away"}`);
+-            }
+-            else {
 -                // Unexpected closure
++
++    socket = tlsSocket;
++    let headersParsed = false;
++    let headerBuffer = Buffer.alloc(0);
++
++    // Set up the WebSocket frame parser (used after HTTP headers are parsed)
++    const feed = createFrameParser((opcode, payload) => {
++        if (opcode === 0x01 || opcode === 0x02) {
++            // Text or binary frame — both carry JSON-RPC for Deno sandbox
++            handleMessage(payload.toString("utf8"));
++        } else if (opcode === 0x08) {
++            // Close frame
++            const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1005;
++            const reason = payload.length > 2 ? payload.subarray(2).toString("utf8") : "";
++            if (options.debug) {
                  const codeDescription = getCloseCodeDescription(code);
-                 console.warn(`WebSocket closed: ${codeDescription}${reasonStr ? ` (${reasonStr})` : ""}`);
+-                console.warn(`WebSocket closed: ${codeDescription}${reasonStr ? ` (${reasonStr})` : ""}`);
++                console.log(`Sandbox connection closed: ${codeDescription}${reason ? ` (${reason})` : ""}`);
              }
-@@ -220,7 +304,6 @@ export function websocketTransport(options) {
-         if (pingInterval) {
-             clearInterval(pingInterval);
++            if (pingInterval) clearInterval(pingInterval);
++            const closeError = new ConnectionClosedError(code, reason);
++            for (const p of pendingRequests.values()) p.reject(closeError);
++            pendingRequests.clear();
++            wsClosed.resolve();
++            closed = true;
++            tlsSocket.destroy();
++        } else if (opcode === 0x09) {
++            // Ping — respond with pong
++            const pongFrame = Buffer.alloc(2 + 4 + payload.length);
++            pongFrame[0] = 0x8A;
++            pongFrame[1] = 0x80 | payload.length;
++            const mask = crypto.randomBytes(4);
++            mask.copy(pongFrame, 2);
++            for (let i = 0; i < payload.length; i++) {
++                pongFrame[2 + 4 + i] = payload[i] ^ mask[i & 3];
++            }
++            if (!tlsSocket.destroyed) tlsSocket.write(pongFrame);
          }
+-        if (pingInterval) {
+-            clearInterval(pingInterval);
+-        }
 -        // Reject all pending requests
-         const closeError = new ConnectionClosedError(code, reasonStr);
-         for (const pending of pendingRequests.values()) {
-             pending.reject(closeError);
-@@ -229,27 +312,27 @@ export function websocketTransport(options) {
-         wsClosed.resolve();
+-        const closeError = new ConnectionClosedError(code, reasonStr);
+-        for (const pending of pendingRequests.values()) {
+-            pending.reject(closeError);
++        // Ignore pong (0x0A) and other opcodes
++    });
++
++    tlsSocket.on("data", (chunk) => {
++        if (!headersParsed) {
++            // Accumulate data until we find the end of HTTP headers
++            headerBuffer = Buffer.concat([headerBuffer, chunk]);
++            const headerEnd = headerBuffer.indexOf("\r\n\r\n");
++            if (headerEnd === -1) return; // Need more data
++
++            const headerStr = headerBuffer.subarray(0, headerEnd).toString("utf8");
++            const remaining = headerBuffer.subarray(headerEnd + 4);
++            headersParsed = true;
++            headerBuffer = Buffer.alloc(0); // Free memory
++
++            // Parse status line
++            const statusLine = headerStr.split("\r\n")[0] || "";
++            const statusMatch = statusLine.match(/HTTP\/\d\.\d\s+(\d+)/);
++            const statusCode = statusMatch ? parseInt(statusMatch[1], 10) : 0;
++
++            if (statusCode === 101) {
++                // Extract sandbox ID from headers
++                const idMatch = headerStr.match(/x-deno-sandbox-id:\s*(\S+)/i);
++                const effectiveSandboxId = idMatch?.[1] || sandboxId;
++
++                // WebSocket upgrade successful — start processing frames
++                options.onReady?.(effectiveSandboxId);
++                wsReady.resolve();
++                pingInterval = setInterval(() => { wsSend("ping"); }, 2000);
++
++                // Process any remaining data as WebSocket frames
++                if (remaining.length > 0) {
++                    feed(remaining);
++                }
++            } else {
++                // Non-101 error — read the body (which may be in `remaining`)
++                let body = remaining.toString("utf8");
++                let err;
++                try {
++                    const json = JSON.parse(body);
++                    err = new ConnectionEstablishmentError(statusCode, json.code, json.message);
++                } catch {
++                    err = new ConnectionEstablishmentError(statusCode, "UNKNOWN", body || `HTTP ${statusCode}`);
++                }
++                error = err;
++                options.onError?.(err);
++                wsReady.reject(err);
++                wsClosed.reject(err);
++                closed = true;
++                tlsSocket.destroy();
++            }
++        } else {
++            // After headers are parsed, all data is WebSocket frames
++            feed(chunk);
+         }
+-        pendingRequests.clear();
+-        wsClosed.resolve();
++    });
++
++    tlsSocket.on("error", (e) => {
++        if (error) return;
++        error = e;
++        options.onError?.(e);
++        wsReady.reject(e);
++        wsClosed.reject(e);
          closed = true;
      });
+-    const send = async (req) => {
+-        if (closed) {
+-            throw new ConnectionClosedError();
 +
-     const send = async (req) => {
-         if (closed) {
-             throw new ConnectionClosedError();
++    tlsSocket.on("close", () => {
++        if (pingInterval) clearInterval(pingInterval);
++        if (!closed) {
++            const closeError = new ConnectionClosedError(1006, "Connection lost");
++            for (const p of pendingRequests.values()) p.reject(closeError);
++            pendingRequests.clear();
++            wsClosed.resolve();
++            closed = true;
          }
++    });
++
++    // Timeout for the initial connection + upgrade
++    const connectTimeout = setTimeout(() => {
++        if (!headersParsed && !closed) {
++            const err = new Error("WebSocket connection timed out");
++            error = err;
++            options.onError?.(err);
++            wsReady.reject(err);
++            wsClosed.reject(err);
++            closed = true;
++            tlsSocket.destroy();
++        }
++    }, 30000);
++    // Clear timeout once headers are parsed (connection established)
++    wsReady.promise.then(() => clearTimeout(connectTimeout)).catch(() => clearTimeout(connectTimeout));
++
++    const send = async (req) => {
++        if (closed) throw new ConnectionClosedError();
          const { resolve, reject, promise } = Promise.withResolvers();
          if (req.id != null) {
 -            pendingRequests.set(req.id, {
@@ -305,25 +515,46 @@ index fb16fcef772172196761b1e7eea7e1363f50895f..6f7e4bf16df698de15a32d65dc76de3e
 +            pendingRequests.set(req.id, { resolve, reject });
          }
          await wsReady.promise;
-         ws.send(JSON.stringify(req));
+-        ws.send(JSON.stringify(req));
++        wsSend(JSON.stringify(req));
          return promise;
      };
 +
      const notify = (notification) => {
-         if (closed) {
-             throw new ConnectionClosedError();
-         }
-         ws.send(JSON.stringify(notification));
+-        if (closed) {
+-            throw new ConnectionClosedError();
+-        }
+-        ws.send(JSON.stringify(notification));
++        if (closed) throw new ConnectionClosedError();
++        wsSend(JSON.stringify(notification));
      };
 +
      return {
          send,
          notify,
-@@ -260,3 +343,127 @@ export function websocketTransport(options) {
+         close: async () => {
+-            ws.close();
++            wsClose(1000, "");
+             return await wsClosed.promise;
+         },
          closed: wsClosed.promise,
      };
  }
 +
++/**
++ * Bun-compatible WebSocket transport for Deno Sandbox API.
++ *
++ * Bun's native WebSocket polyfill for `ws` does NOT forward custom HTTP
++ * headers (like Authorization) on the upgrade request, causing the Deno
++ * sandbox API to reject with a non-101 status.
++ *
++ * Instead, we do the HTTP upgrade ourselves via node:https, extract the
++ * sandbox ID from the 101 response headers, and then use the raw TLS
++ * socket for WebSocket-framed JSON-RPC communication.
++ *
++ * This is a single-phase approach: one HTTP upgrade, one socket.
++ * No probe + reconnect, so the sandbox is never orphaned.
++ */
 +export function websocketTransport(options) {
 +    const headers = {
 +        "authorization": `Bearer ${options.token}`,
@@ -335,115 +566,7 @@ index fb16fcef772172196761b1e7eea7e1363f50895f..6f7e4bf16df698de15a32d65dc76de3e
 +        headers["X-Deno-Org"] = options.org;
 +    }
 +
-+    // --- Bun-compatible two-phase transport ---
-+    //
-+    // Phase 1: HTTP probe to the original endpoint.
-+    //   - Extracts x-deno-sandbox-id from 101 response headers.
-+    //   - Handles non-101 errors gracefully (ConnectionEstablishmentError).
-+    //
-+    // Phase 2: ws.WebSocket to the connect endpoint for JSON-RPC.
-+    //   - Uses sandbox ID from probe to build connect URL.
-+    //   - open/message/close/error events work fine in Bun.
-+
-+    const originalEndpoint = options.endpoint;
-+    const isCreateEndpoint = originalEndpoint.includes("/api/v3/sandboxes/create");
-+
-+    // We return the transport interface immediately (synchronously, as the
-+    // original code does). The probe + WS connection happens asynchronously
-+    // and the send/notify methods await wsReady internally.
-+    //
-+    // However, we need to handle the async probe before creating the WS.
-+    // We use a wrapper that delays the WS creation until the probe completes.
-+
-+    const wsReady = Promise.withResolvers();
-+    wsReady.promise.catch(() => { });
-+    const wsClosed = Promise.withResolvers();
-+    wsClosed.promise.catch(() => { });
-+    let closed = false;
-+    let innerTransport = null;
-+
-+    // Start the async probe + connect flow
-+    (async () => {
-+        try {
-+            // Phase 1: Probe
-+            const probeResult = await bunProbeUpgrade(originalEndpoint, headers);
-+            const sandboxId = probeResult.sandboxId;
-+
-+            if (options.debug) {
-+                console.log("Probe succeeded, sandbox ID:", sandboxId);
-+                if (probeResult.traceId) {
-+                    console.log("trace ID:", probeResult.traceId);
-+                }
-+            }
-+
-+            // Phase 2: Build connect URL and create WS
-+            let connectEndpoint = originalEndpoint;
-+            if (isCreateEndpoint && sandboxId) {
-+                // Rewrite /api/v3/sandboxes/create → /api/v3/sandbox/{id}/connect
-+                const url = new URL(originalEndpoint.replace(/^ws/, "http"));
-+                url.pathname = `/api/v3/sandbox/${sandboxId}/connect`;
-+                connectEndpoint = url.href.replace(/^http/, "ws");
-+            }
-+
-+            // Connect headers: same auth but NO config (config was for creation)
-+            const connectHeaders = {
-+                "authorization": headers["authorization"],
-+            };
-+            if (headers["X-Deno-Org"]) {
-+                connectHeaders["X-Deno-Org"] = headers["X-Deno-Org"];
-+            }
-+
-+            innerTransport = createRpcWebSocket(connectEndpoint, connectHeaders, sandboxId, {
-+                ...options,
-+                onReady: (id) => {
-+                    options.onReady?.(id);
-+                    wsReady.resolve();
-+                },
-+                onError: (err) => {
-+                    options.onError?.(err);
-+                    wsReady.reject(err);
-+                    wsClosed.reject(err);
-+                    closed = true;
-+                },
-+            });
-+
-+            // Forward the inner closed promise
-+            innerTransport.closed.then(
-+                () => wsClosed.resolve(),
-+                (err) => wsClosed.reject(err)
-+            );
-+
-+        } catch (err) {
-+            // Probe failed — report error through the standard callbacks
-+            options.onError?.(err);
-+            wsReady.reject(err);
-+            wsClosed.reject(err);
-+            closed = true;
-+        }
-+    })();
-+
-+    const send = async (req) => {
-+        if (closed) throw new ConnectionClosedError();
-+        await wsReady.promise;
-+        return innerTransport.send(req);
-+    };
-+
-+    const notify = (notification) => {
-+        if (closed) throw new ConnectionClosedError();
-+        if (!innerTransport) throw new ConnectionClosedError();
-+        innerTransport.notify(notification);
-+    };
-+
-+    return {
-+        send,
-+        notify,
-+        close: async () => {
-+            if (innerTransport) {
-+                return await innerTransport.close();
-+            }
-+            closed = true;
-+            wsClosed.resolve();
-+        },
-+        closed: wsClosed.promise,
-+    };
++    // Use createRpcWebSocket which now handles the HTTP upgrade + raw socket
++    // framing entirely via node:https (no Bun WebSocket involved).
++    return createRpcWebSocket(options.endpoint, headers, null, options);
 +}

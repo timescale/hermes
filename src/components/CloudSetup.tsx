@@ -167,16 +167,17 @@ export function CloudSetup({
         }
 
         setState({ type: 'validating-token', message: 'Validating token' });
-        const valid = await validateDenoToken(token);
+        const result = await validateDenoToken(token);
         if (cancelled) return;
 
-        if (valid) {
-          startSnapshotCheck(token);
-        } else {
+        if (result === 'invalid') {
           setState({
             type: 'invalid-token',
             message: 'Stored token is invalid or expired',
           });
+        } else {
+          // 'valid' or 'error' (API down) — proceed with stored token
+          startSnapshotCheck(token);
         }
       } catch (err) {
         if (cancelled) return;
@@ -214,15 +215,16 @@ export function CloudSetup({
     setState({ type: 'validating-token', message: 'Validating token' });
 
     try {
-      const valid = await validateDenoToken(token);
-      if (valid) {
-        await setDenoToken(token);
-        startSnapshotCheck(token);
-      } else {
+      const result = await validateDenoToken(token);
+      if (result === 'invalid') {
         setState({
           type: 'invalid-token',
           message: 'Token is invalid. Please check and try again.',
         });
+      } else {
+        // 'valid' or 'error' (API down) — save and proceed
+        await setDenoToken(token);
+        startSnapshotCheck(token);
       }
     } catch (err) {
       log.debug({ err }, 'Error validating token');
