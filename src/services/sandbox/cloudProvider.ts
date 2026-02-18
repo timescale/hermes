@@ -530,8 +530,10 @@ export class CloudSandboxProvider implements SandboxProvider {
     const db = openSessionDb();
 
     const existing = dbGetSession(db, sessionId);
-    if (!existing?.snapshotSlug) {
-      throw new Error('No resume snapshot available for this session');
+    if (!existing?.snapshotSlug && !existing?.volumeSlug) {
+      throw new Error(
+        'No resume snapshot or volume available for this session',
+      );
     }
 
     // Check region consistency — volumes/snapshots must stay in the same region
@@ -545,24 +547,38 @@ export class CloudSandboxProvider implements SandboxProvider {
     // Use session's original region for consistency (volumes/snapshots are regional)
     const region = existing.region ?? currentRegion;
 
-    // 1. Create a root volume from the resume snapshot.
-    //    The resume snapshot captures the full root filesystem (including
-    //    /work/app with the cloned repo and any agent changes) so we only
-    //    need a single volume — no separate /work mount.
-    const resumeVolumeSlug = denoSlug('hr', existing.name);
-    const resumeVolume = await client.createVolume({
-      slug: resumeVolumeSlug,
-      region,
-      from: existing.snapshotSlug,
-      capacity: '10GiB',
-    });
+    // 1. Determine the root volume to boot from.
+    //    Preferred: create a new volume from the resume snapshot (CoW).
+    //    Fallback:  boot directly from the session's existing volume
+    //    (available when stop() snapshot failed but the volume persists).
+    let bootVolumeSlug: string;
+    let createdNewVolume = false;
+
+    if (existing.snapshotSlug) {
+      const resumeVolumeSlug = denoSlug('hr', existing.name);
+      const resumeVolume = await client.createVolume({
+        slug: resumeVolumeSlug,
+        region,
+        from: existing.snapshotSlug,
+        capacity: '10GiB',
+      });
+      bootVolumeSlug = resumeVolume.slug;
+      createdNewVolume = true;
+    } else {
+      // No snapshot — boot directly from the existing volume
+      bootVolumeSlug = existing.volumeSlug as string;
+      log.info(
+        { volumeSlug: bootVolumeSlug },
+        'No resume snapshot — booting directly from session volume',
+      );
+    }
 
     // 2. Boot new sandbox from the resume volume (contains tools + work data)
     let sandbox: ResolvedSandbox;
     try {
       sandbox = await client.createSandbox({
         region: region as 'ord' | 'ams',
-        root: resumeVolume.slug,
+        root: bootVolumeSlug,
         timeout: '30m',
         memory: '2GiB',
         labels: {
@@ -573,14 +589,16 @@ export class CloudSandboxProvider implements SandboxProvider {
         },
       });
     } catch (err) {
-      // Clean up the orphaned volume
-      try {
-        await client.deleteVolume(resumeVolume.id);
-      } catch (delErr) {
-        log.debug(
-          { err: delErr },
-          'Failed to clean up volume after sandbox creation failure',
-        );
+      // Clean up the orphaned volume (only if we created a new one)
+      if (createdNewVolume) {
+        try {
+          await client.deleteVolume(bootVolumeSlug);
+        } catch (delErr) {
+          log.debug(
+            { err: delErr },
+            'Failed to clean up volume after sandbox creation failure',
+          );
+        }
       }
 
       const message = (err as { message?: string })?.message ?? String(err);
@@ -676,7 +694,7 @@ export class CloudSandboxProvider implements SandboxProvider {
       created: new Date().toISOString(),
       interactive: options.mode === 'interactive' || options.mode === 'shell',
       region,
-      volumeSlug: resumeVolume.slug,
+      volumeSlug: bootVolumeSlug,
       resumedFrom: sessionId,
     };
     upsertSession(db, newSession);
@@ -725,83 +743,77 @@ export class CloudSandboxProvider implements SandboxProvider {
   async remove(sessionId: string): Promise<void> {
     const db = openSessionDb();
     const session = dbGetSession(db, sessionId);
-    const errors: string[] = [];
 
+    // Best-effort cleanup of cloud resources.  Always remove the local
+    // session record afterwards — cloud resources have TTLs and can be
+    // cleaned up manually if individual deletes fail.
     try {
       const client = await this.getClient();
+
       // Kill sandbox if running
       try {
         await client.killSandbox(sessionId);
       } catch (err) {
-        errors.push(`failed to kill sandbox: ${String(err)}`);
+        log.debug({ err, sessionId }, 'Failed to kill sandbox during remove');
       }
-      // Delete volume
-      if (session?.volumeSlug) {
-        try {
-          await client.deleteVolume(session.volumeSlug);
-        } catch (err) {
-          errors.push(
-            `failed to delete volume ${session.volumeSlug}: ${String(err)}`,
-          );
-        }
-      }
-      // Delete resume snapshot
+
+      // Delete snapshot BEFORE volume (snapshots depend on their source
+      // volume — the API rejects volume deletion while snapshots exist).
       if (session?.snapshotSlug) {
         try {
           await client.deleteSnapshot(session.snapshotSlug);
         } catch (err) {
-          errors.push(
-            `failed to delete snapshot ${session.snapshotSlug}: ${String(err)}`,
+          log.debug(
+            { err, snapshotSlug: session.snapshotSlug },
+            'Failed to delete snapshot during remove',
+          );
+        }
+      }
+
+      // Delete volume (may fail if another session's snapshot references
+      // it — that's expected and fine).
+      if (session?.volumeSlug) {
+        try {
+          await client.deleteVolume(session.volumeSlug);
+        } catch (err) {
+          log.debug(
+            { err, volumeSlug: session.volumeSlug },
+            'Failed to delete volume during remove',
           );
         }
       }
     } catch (err) {
-      errors.push(`failed to initialize cloud cleanup: ${String(err)}`);
+      log.debug({ err, sessionId }, 'Failed to initialize cloud cleanup');
     }
 
-    if (errors.length > 0) {
-      log.debug({ sessionId, errors }, 'Failed to clean up cloud resources');
-      throw new Error(errors.join('; '));
-    }
-
+    // Always remove from local DB regardless of cleanup results
     dbDeleteSession(db, sessionId);
   }
 
   async stop(sessionId: string): Promise<void> {
     const db = openSessionDb();
     const session = dbGetSession(db, sessionId);
-    const errors: string[] = [];
-    let stopped = false;
+    const client = await this.getClient();
 
-    try {
-      const client = await this.getClient();
+    // 1. Kill sandbox first (detaches the volume so it can be snapshotted)
+    await client.killSandbox(sessionId);
+    updateSessionStatus(db, sessionId, 'stopped');
 
-      // Snapshot work volume for resume
-      if (session?.volumeSlug) {
-        const snapshotSlug = denoSlug('hsnap', session.name);
-        try {
-          await client.snapshotVolume(session.volumeSlug, {
-            slug: snapshotSlug,
-          });
-          updateSessionSnapshot(db, sessionId, snapshotSlug);
-        } catch (err) {
-          log.warn({ err }, 'Failed to snapshot volume before stop');
-          errors.push(`failed to snapshot volume: ${String(err)}`);
-        }
+    // 2. Best-effort snapshot for resume.  The volume is still available
+    //    for direct boot even if the snapshot fails, so this is non-fatal.
+    if (session?.volumeSlug) {
+      const snapshotSlug = denoSlug('hsnap', session.name);
+      try {
+        await client.snapshotVolume(session.volumeSlug, {
+          slug: snapshotSlug,
+        });
+        updateSessionSnapshot(db, sessionId, snapshotSlug);
+      } catch (err) {
+        log.warn(
+          { err, volumeSlug: session.volumeSlug },
+          'Failed to snapshot volume after stop — resume will boot from volume directly',
+        );
       }
-
-      // Kill sandbox
-      await client.killSandbox(sessionId);
-      stopped = true;
-    } catch (err) {
-      errors.push(`failed to stop cloud sandbox: ${String(err)}`);
-    }
-
-    if (stopped) {
-      updateSessionStatus(db, sessionId, 'stopped');
-    }
-    if (errors.length > 0) {
-      throw new Error(errors.join('; '));
     }
   }
 
