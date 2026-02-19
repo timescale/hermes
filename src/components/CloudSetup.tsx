@@ -395,7 +395,7 @@ export function CloudSetup({
  * @returns Promise that resolves with the setup result
  */
 export async function runCloudSetupScreen(): Promise<CloudSetupResult> {
-  let resolveSetup: (result: CloudSetupResult) => void;
+  let resolveSetup!: (result: CloudSetupResult) => void;
   const setupPromise = new Promise<CloudSetupResult>((resolve) => {
     resolveSetup = resolve;
   });

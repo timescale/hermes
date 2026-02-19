@@ -310,11 +310,17 @@ TMUX_EOF`,
     onProgress?.({ type: 'done', snapshotSlug });
     return snapshotSlug;
   } finally {
-    // Cleanup: kill sandbox if still alive
-    onProgress?.({
-      type: 'cleaning-up',
-      message: 'Cleaning up build resources',
-    });
+    // Only emit cleaning-up progress if we actually need to clean up
+    // (i.e., the snapshot wasn't successfully created). On the success path,
+    // 'done' has already been emitted — showing 'cleaning-up' after would
+    // cause the UI to briefly flash "Cleaning up" after completion.
+    const needsCleanup = !snapshotCreated || sandbox !== null;
+    if (needsCleanup) {
+      onProgress?.({
+        type: 'cleaning-up',
+        message: 'Cleaning up build resources',
+      });
+    }
     if (sandbox) {
       try {
         await sandbox.close();

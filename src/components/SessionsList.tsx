@@ -10,13 +10,12 @@ import { getPrForBranch } from '../services/github';
 import { log } from '../services/logger';
 import {
   getProviderForSession,
-  getSandboxProvider,
   type HermesSession,
   listAllSessions,
   type SandboxProvider,
-  type SandboxStats,
 } from '../services/sandbox';
 import {
+  fetchDockerStats,
   formatRelativeTime,
   getStatusIcon,
   getStatusText,
@@ -106,24 +105,7 @@ export function SessionsList({
     [sessions],
   );
   const getStats = useCallback(
-    async (ids: string[]): Promise<Map<string, SandboxStats>> => {
-      const dockerIds = ids.filter((id) =>
-        sessions.some(
-          (session) =>
-            session.id === id &&
-            session.provider === 'docker' &&
-            session.status === 'running',
-        ),
-      );
-      if (dockerIds.length === 0) {
-        return new Map();
-      }
-      const dockerProvider = getSandboxProvider('docker');
-      if (!dockerProvider.getStats) {
-        return new Map();
-      }
-      return dockerProvider.getStats(dockerIds);
-    },
+    (ids: string[]) => fetchDockerStats(ids, sessions),
     [sessions],
   );
   const containerStats = useContainerStats(runningIds, getStats);

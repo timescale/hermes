@@ -1,4 +1,5 @@
-import type { HermesSession } from './sandbox/types.ts';
+import { getSandboxProvider } from './sandbox/index.ts';
+import type { HermesSession, SandboxStats } from './sandbox/types.ts';
 
 export function formatRelativeTime(isoDate: string): string {
   const date = new Date(isoDate);
@@ -56,4 +57,37 @@ export function getStatusColor(session: HermesSession): string {
     default:
       return 'gray';
   }
+}
+
+/**
+ * Fetch sandbox stats for the given session IDs, filtering to only Docker sessions.
+ * This is a shared utility used by components that need container CPU/memory stats.
+ *
+ * @param ids - Session IDs to fetch stats for
+ * @param sessions - Full session list used to filter to running Docker sessions.
+ *   When omitted the ids are assumed to already be running Docker container IDs.
+ */
+export async function fetchDockerStats(
+  ids: string[],
+  sessions?: HermesSession[],
+): Promise<Map<string, SandboxStats>> {
+  const dockerIds = sessions
+    ? ids.filter((id) =>
+        sessions.some(
+          (s) =>
+            s.id === id && s.provider === 'docker' && s.status === 'running',
+        ),
+      )
+    : ids;
+
+  if (dockerIds.length === 0) {
+    return new Map();
+  }
+
+  const dockerProvider = getSandboxProvider('docker');
+  if (!dockerProvider.getStats) {
+    return new Map();
+  }
+
+  return dockerProvider.getStats(dockerIds);
 }

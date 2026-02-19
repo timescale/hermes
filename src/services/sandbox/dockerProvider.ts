@@ -37,7 +37,8 @@ import type {
 /**
  * Map a Docker HermesSession to the unified HermesSession type.
  * Status mapping: 'running' -> 'running', 'exited' -> 'exited',
- * all others ('paused', 'restarting', 'dead', 'created') -> 'stopped'.
+ * 'created' -> 'unknown' (never started),
+ * all others ('paused', 'restarting', 'dead') -> 'stopped'.
  */
 function mapDockerSession(docker: DockerSession): HermesSession {
   let status: HermesSession['status'];
@@ -47,6 +48,9 @@ function mapDockerSession(docker: DockerSession): HermesSession {
       break;
     case 'exited':
       status = 'exited';
+      break;
+    case 'created':
+      status = 'unknown';
       break;
     default:
       status = 'stopped';
@@ -121,7 +125,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   async create(options: CreateSandboxOptions): Promise<HermesSession> {
     const { onProgress } = options;
     onProgress?.('Starting container');
-    await startContainer({
+    const containerName = await startContainer({
       branchName: options.branchName,
       prompt: options.prompt,
       repoInfo: options.repoInfo,
@@ -137,7 +141,6 @@ export class DockerSandboxProvider implements SandboxProvider {
 
     // Fetch the full session info for the container
     onProgress?.('Loading session');
-    const containerName = `hermes-${options.branchName}`;
     const session = await dockerGetSession(containerName);
     if (!session) {
       throw new Error('Failed to find created Docker session');

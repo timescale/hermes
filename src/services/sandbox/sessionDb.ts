@@ -6,6 +6,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { userConfigDir } from '../config.ts';
+import { log } from '../logger.ts';
 import type { HermesSession, SandboxProviderType } from './types.ts';
 
 // ============================================================================
@@ -53,13 +54,18 @@ export function initSessionSchema(db: Database): void {
   db.exec(SCHEMA_SQL);
 }
 
+let _db: Database | null = null;
+
 /** Open or create the session database, run migrations */
 export function openSessionDb(): Database {
+  if (_db) return _db;
   const dir = userConfigDir();
   mkdirSync(dir, { recursive: true });
   const dbPath = join(dir, 'sessions.db');
+  log.debug(`Opening session database at ${dbPath}`);
   const db = new Database(dbPath);
   initSessionSchema(db);
+  _db = db;
   return db;
 }
 
@@ -98,7 +104,13 @@ function rowToSession(row: SessionRow): HermesSession {
     provider: row.provider as SandboxProviderType,
     name: row.name,
     branch: row.branch ?? '',
-    agent: (row.agent ?? 'claude') as HermesSession['agent'],
+    agent: (() => {
+      if (row.agent == null) {
+        log.warn(`Session ${row.id} has null agent, defaulting to 'claude'`);
+        return 'claude';
+      }
+      return row.agent;
+    })() as HermesSession['agent'],
     model: row.model ?? undefined,
     prompt: row.prompt ?? '',
     repo: row.repo ?? '',

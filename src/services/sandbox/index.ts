@@ -18,6 +18,7 @@ export type {
 } from './types.ts';
 
 import { readConfig } from '../config.ts';
+import { getDenoToken } from '../deno.ts';
 import { log } from '../logger.ts';
 import { CloudSandboxProvider } from './cloudProvider.ts';
 import { DockerSandboxProvider } from './dockerProvider.ts';
@@ -36,6 +37,8 @@ export function getSandboxProvider(type: SandboxProviderType): SandboxProvider {
       return new DockerSandboxProvider();
     case 'cloud':
       return new CloudSandboxProvider();
+    default:
+      throw new Error(`Unknown sandbox provider type: ${type}`);
   }
 }
 
@@ -61,19 +64,34 @@ export function getProviderForSession(session: HermesSession): SandboxProvider {
  * Returns a single merged list, sorted by creation time descending.
  */
 export async function listAllSessions(): Promise<HermesSession[]> {
-  const providers: SandboxProvider[] = [
-    getSandboxProvider('docker'),
-    getSandboxProvider('cloud'),
-  ];
+  const providerTypes: SandboxProviderType[] = ['docker'];
 
-  const results = await Promise.allSettled(providers.map((p) => p.list()));
+  // Only include cloud provider if a deno token is configured
+  const denoToken = await getDenoToken();
+  if (denoToken) {
+    providerTypes.push('cloud');
+  }
+
+  const providers = providerTypes.map((type) => ({
+    type,
+    provider: getSandboxProvider(type),
+  }));
+
+  const results = await Promise.allSettled(
+    providers.map((p) => p.provider.list()),
+  );
   const sessions: HermesSession[] = [];
 
-  for (const result of results) {
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i]!;
+    const providerType = providers[i]!.type;
     if (result.status === 'fulfilled') {
       sessions.push(...result.value);
     } else {
-      log.debug({ err: result.reason }, 'Failed to list sessions for provider');
+      log.debug(
+        { err: result.reason, provider: providerType },
+        'Failed to list sessions for provider',
+      );
     }
   }
 
