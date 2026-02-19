@@ -2,12 +2,8 @@
 // Agent Command Builder - Shared logic for building agent shell commands
 // ============================================================================
 
+import { shellEscape } from '../utils.ts';
 import type { AgentType } from './config.ts';
-
-/** Escape a value for safe interpolation in a single-quoted shell string. */
-function shellEscapeSingleQuote(value: string): string {
-  return value.replace(/'/g, "'\\''");
-}
 
 export interface AgentCommandOptions {
   agent: AgentType;
@@ -37,9 +33,9 @@ export interface AgentCommandOptions {
 export function buildAgentCommand(options: AgentCommandOptions): string {
   const { agent, mode, model, agentArgs, prompt } = options;
   const cont = options.continue ?? false;
-  const modelArg = model ? ` --model '${shellEscapeSingleQuote(model)}'` : '';
+  const modelArg = model ? ` --model ${shellEscape(model)}` : '';
   const extraArgs = agentArgs?.length
-    ? ` ${agentArgs.map((a) => `'${shellEscapeSingleQuote(a)}'`).join(' ')}`
+    ? ` ${agentArgs.map((a) => shellEscape(a)).join(' ')}`
     : '';
   const hasPrompt = prompt != null && prompt.trim().length > 0;
 
@@ -74,7 +70,7 @@ export function buildAgentCommand(options: AgentCommandOptions): string {
   const continueFlag = cont ? ' -c' : '';
   if (hasPrompt && !cont) {
     // --prompt is only used for fresh interactive sessions (not continue)
-    return `opencode${modelArg}${extraArgs} --prompt '${shellEscapeSingleQuote(prompt)}'`;
+    return `opencode${modelArg}${extraArgs} --prompt ${shellEscape(prompt)}`;
   }
   return `opencode${modelArg}${extraArgs}${continueFlag}`;
 }

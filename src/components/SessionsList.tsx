@@ -16,6 +16,11 @@ import {
   type SandboxProvider,
   type SandboxStats,
 } from '../services/sandbox';
+import {
+  formatRelativeTime,
+  getStatusIcon,
+  getStatusText,
+} from '../services/sessionDisplay';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
 import { formatShellError, type ShellError } from '../utils';
@@ -46,49 +51,6 @@ interface ToastState {
   message: string;
   type: ToastType;
   duration?: number;
-}
-
-function formatRelativeTime(isoDate: string): string {
-  const date = new Date(isoDate);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffSecs = Math.floor(diffMs / 1000);
-  const diffMins = Math.floor(diffSecs / 60);
-  const diffHours = Math.floor(diffMins / 60);
-  const diffDays = Math.floor(diffHours / 24);
-
-  if (diffDays > 0) {
-    return `${diffDays}d ago`;
-  }
-  if (diffHours > 0) {
-    return `${diffHours}h ago`;
-  }
-  if (diffMins > 0) {
-    return `${diffMins}m ago`;
-  }
-  return 'just now';
-}
-
-function getStatusIcon(session: HermesSession): string {
-  switch (session.status) {
-    case 'running':
-      return '●';
-    case 'exited':
-      return session.exitCode === 0 ? '✓' : '✗';
-    case 'stopped':
-      return '⏸';
-    case 'unknown':
-      return '○';
-    default:
-      return '○';
-  }
-}
-
-function getStatusText(session: HermesSession): string {
-  if (session.status === 'exited') {
-    return session.exitCode === 0 ? 'complete' : `failed(${session.exitCode})`;
-  }
-  return session.status;
 }
 
 const FILTER_LABELS: Record<FilterMode, string> = {

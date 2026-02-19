@@ -2,70 +2,10 @@
 // Cloud Snapshot Management - Base image for cloud sandboxes
 // ============================================================================
 
-import type { Sandbox } from '@deno/sandbox';
-
 import packageJson from '../../../package.json' with { type: 'json' };
 import { log } from '../logger.ts';
 import { DenoApiClient, denoSlug, type ResolvedSandbox } from './denoApi.ts';
-
-/** Escape a value for safe embedding in a single-quoted shell string. */
-function shellEscape(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-/**
- * Run a shell command in the sandbox with stdout/stderr piped (not inherited)
- * to prevent output from leaking onto the TUI. Optionally runs with sudo.
- *
- * IMPORTANT: The @deno/sandbox SDK has a chaining bug where each builder
- * method (sudo, stdout, stderr, noThrow) creates a fresh clone that only
- * retains the single property being set. This means
- * `sandbox.sh\`...\`.sudo().stdout('piped')` loses the sudo flag.
- * We bypass this by using `sandbox.spawn()` directly.
- */
-async function run(
-  sandbox: Sandbox,
-  command: string,
-  step: string,
-  options?: { sudo?: boolean },
-): Promise<void> {
-  // Wrap in `sudo bash -c '...'` so the ENTIRE command chain runs as root.
-  // A bare `sudo cmd1 && cmd2` only elevates cmd1.
-  const finalCommand = options?.sudo
-    ? `sudo bash -c ${shellEscape(command)}`
-    : command;
-  log.debug(
-    { step, command: finalCommand.slice(0, 200) },
-    'Running build step',
-  );
-  const child = await sandbox.spawn('bash', {
-    args: ['-c', finalCommand],
-    stdout: 'piped',
-    stderr: 'piped',
-    env: { BASH_ENV: '$HOME/.bashrc' },
-  });
-  const result = await child.output();
-  if (!result.status.success) {
-    const stderr = result.stderrText ?? '';
-    const stdout = result.stdoutText ?? '';
-    log.error(
-      { step, exitCode: result.status.code, stderr, stdout },
-      'Snapshot build step failed',
-    );
-    throw new Error(
-      `Snapshot build failed at "${step}" (exit ${result.status.code}): ${stderr.slice(0, 500)}`,
-    );
-  } else {
-    const stdout = result.stdoutText ?? '';
-    const stderr = result.stderrText ?? '';
-    if (stdout || stderr) {
-      log.debug(
-        { step, stdout: stdout.slice(0, 500), stderr: stderr.slice(0, 500) },
-        'Snapshot build step output',
-      );
-    }
-  }
-}
+import { sandboxExec } from './sandboxExec.ts';
 
 export type SnapshotBuildProgress =
   | { type: 'checking' }
@@ -201,10 +141,10 @@ export async function ensureCloudSnapshot(options: {
       type: 'installing',
       message: 'Verifying sandbox environment',
     });
-    await run(
+    await sandboxExec(
       sandbox,
       'echo "user=$(whoami) home=$HOME sudo=$(which sudo 2>/dev/null || echo not-found)" && sudo whoami',
-      'Verify environment',
+      { label: 'Verify environment' },
     );
 
     // 5. Install system packages (root)
@@ -213,11 +153,10 @@ export async function ensureCloudSnapshot(options: {
       message: 'Installing system packages',
       detail: 'git, curl, ca-certificates, zip, unzip, tar, gzip, jq, tmux',
     });
-    await run(
+    await sandboxExec(
       sandbox,
       'DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates zip unzip tar gzip jq openssh-client tmux',
-      'Install system packages',
-      { sudo: true },
+      { label: 'Install system packages', sudo: true },
     );
 
     // 6. Install GitHub CLI (root)
@@ -225,11 +164,10 @@ export async function ensureCloudSnapshot(options: {
       type: 'installing',
       message: 'Installing GitHub CLI',
     });
-    await run(
+    await sandboxExec(
       sandbox,
       'curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y gh',
-      'Install GitHub CLI',
-      { sudo: true },
+      { label: 'Install GitHub CLI', sudo: true },
     );
 
     // 7. Install Claude Code (default user)
@@ -238,10 +176,10 @@ export async function ensureCloudSnapshot(options: {
       message: 'Installing Claude Code',
       detail: 'This may take a minute',
     });
-    await run(
+    await sandboxExec(
       sandbox,
       'curl -fsSL https://claude.ai/install.sh | bash',
-      'Install Claude Code',
+      { label: 'Install Claude Code' },
     );
 
     // 8. Install Tiger CLI (default user)
@@ -249,21 +187,19 @@ export async function ensureCloudSnapshot(options: {
       type: 'installing',
       message: 'Installing Tiger CLI',
     });
-    await run(
-      sandbox,
-      'curl -fsSL https://cli.tigerdata.com | sh',
-      'Install Tiger CLI',
-    );
+    await sandboxExec(sandbox, 'curl -fsSL https://cli.tigerdata.com | sh', {
+      label: 'Install Tiger CLI',
+    });
 
     // 9. Install OpenCode (default user, using ~ for home)
     onProgress?.({
       type: 'installing',
       message: 'Installing OpenCode',
     });
-    await run(
+    await sandboxExec(
       sandbox,
       'curl -fsSL https://opencode.ai/install | bash',
-      'Install OpenCode',
+      { label: 'Install OpenCode' },
     );
 
     // 10. Configure git and PATH (default user)
@@ -271,30 +207,30 @@ export async function ensureCloudSnapshot(options: {
       type: 'installing',
       message: 'Configuring environment',
     });
-    await run(
+    await sandboxExec(
       sandbox,
       'git config --global user.email "hermes@tigerdata.com" && git config --global user.name "Hermes Agent"',
-      'Configure git',
+      { label: 'Configure git' },
     );
     // Ensure ~/.local/bin and ~/.opencode/bin are in PATH for all shell types.
     // SSH login shells source /etc/profile.d/*.sh (alphabetically).  The Deno
     // platform generates app-env.sh which resets PATH to system dirs.  Our
     // hermes-path.sh (h > a) runs after and appends user bin dirs.
-    await run(
+    await sandboxExec(
       sandbox,
       'echo \'export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"\' | sudo tee /etc/profile.d/hermes-path.sh > /dev/null && sudo chmod +x /etc/profile.d/hermes-path.sh',
-      'Configure PATH in profile.d',
+      { label: 'Configure PATH in profile.d' },
     );
     // Also add to .bashrc for non-login shells that use BASH_ENV
-    await run(
+    await sandboxExec(
       sandbox,
       'echo \'export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"\' >> ~/.bashrc',
-      'Configure PATH in bashrc',
+      { label: 'Configure PATH in bashrc' },
     );
 
     // 11. Configure tmux for detach/reattach workflow
     // ctrl+\ immediately detaches (matches Docker's --detach-keys=ctrl-\\)
-    await run(
+    await sandboxExec(
       sandbox,
       `cat > ~/.tmux.conf << 'TMUX_EOF'
 # Detach with ctrl+\\ (no prefix needed) — matches Docker detach keys.
@@ -310,20 +246,19 @@ set -g status off
 set -g default-terminal "xterm-256color"
 set -ga terminal-overrides ",xterm-256color:Tc"
 TMUX_EOF`,
-      'Configure tmux',
+      { label: 'Configure tmux' },
     );
 
     // 12. Create /work directory for session data, owned by the default user.
     //     Two steps: mkdir as root, then chown as the app user (so $(id -u)
     //     resolves to the correct non-root uid).
-    await run(sandbox, 'mkdir -p /work', 'Create /work directory', {
+    await sandboxExec(sandbox, 'mkdir -p /work', {
+      label: 'Create /work directory',
       sudo: true,
     });
-    await run(
-      sandbox,
-      'sudo chown $(id -u):$(id -g) /work',
-      'Chown /work to app user',
-    );
+    await sandboxExec(sandbox, 'sudo chown $(id -u):$(id -g) /work', {
+      label: 'Chown /work to app user',
+    });
 
     // 13. Kill sandbox to detach the volume (required before snapshotting)
     onProgress?.({

@@ -4,7 +4,11 @@
 
 import type { Sandbox } from '@deno/sandbox';
 import { runCloudSetupScreen } from '../../components/CloudSetup.tsx';
-import { enterSubprocessScreen, resetTerminal } from '../../utils.ts';
+import {
+  enterSubprocessScreen,
+  resetTerminal,
+  shellEscape,
+} from '../../utils.ts';
 import { buildAgentCommand, buildContinueCommand } from '../agentCommand.ts';
 import type { AgentType } from '../config.ts';
 import { readConfig } from '../config.ts';
@@ -13,6 +17,7 @@ import { getCredentialFiles } from '../docker.ts';
 import { log } from '../logger.ts';
 import { ensureCloudSnapshot } from './cloudSnapshot.ts';
 import { DenoApiClient, denoSlug, type ResolvedSandbox } from './denoApi.ts';
+import { sandboxExec } from './sandboxExec.ts';
 import {
   deleteSession as dbDeleteSession,
   getSession as dbGetSession,
@@ -39,13 +44,13 @@ import type {
 /** Name of the tmux session used for agent processes inside cloud sandboxes. */
 const TMUX_SESSION = 'hermes';
 
-// ============================================================================
-// Shell Helpers
-// ============================================================================
-
-/** Escape a value for safe interpolation in a shell command string. */
-function shellEscape(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
+/** Check whether an error message indicates a concurrency/quota limit. */
+function isConcurrencyLimitError(message: string): boolean {
+  return (
+    message.includes('limit') ||
+    message.includes('concurrent') ||
+    message.includes('quota')
+  );
 }
 
 // ============================================================================
@@ -58,7 +63,9 @@ function shellEscape(value: string): string {
  * so paths are correct for the sandbox environment.
  */
 async function injectCredentials(sandbox: Sandbox): Promise<void> {
-  const homeResult = await spawnShellCapture(sandbox, 'echo $HOME');
+  const homeResult = await sandboxExec(sandbox, 'echo $HOME', {
+    capture: true,
+  });
   const home = homeResult.trim();
   const credFiles = await getCredentialFiles(home);
   for (const file of credFiles) {
@@ -147,58 +154,6 @@ async function sshIntoSandbox(
   } finally {
     resetTerminal();
   }
-}
-
-/**
- * Run a shell command in the sandbox with piped stdout/stderr.
- * Throws on non-zero exit code.
- *
- * Uses spawn() directly instead of sandbox.sh because the SDK has a
- * chaining bug: each builder method (sudo, stdout, stderr, noThrow) creates
- * a fresh clone that only retains the single property being set, losing all
- * previous chain state.
- */
-async function spawnShell(sandbox: Sandbox, command: string): Promise<void> {
-  const proc = await sandbox.spawn('bash', {
-    args: ['-c', command],
-    stdout: 'piped',
-    stderr: 'piped',
-    env: { BASH_ENV: '$HOME/.bashrc' },
-  });
-  const result = await proc.output();
-  if (!result.status.success) {
-    const stderr = result.stderrText ?? '';
-    log.warn(
-      { command: command.slice(0, 200), exitCode: result.status.code, stderr },
-      'Sandbox command failed',
-    );
-    throw new Error(
-      `Sandbox command failed (exit ${result.status.code}): ${stderr || command}`,
-    );
-  }
-}
-
-/**
- * Run a shell command and return its stdout text. Piped so nothing leaks to TUI.
- */
-async function spawnShellCapture(
-  sandbox: Sandbox,
-  command: string,
-): Promise<string> {
-  const proc = await sandbox.spawn('bash', {
-    args: ['-c', command],
-    stdout: 'piped',
-    stderr: 'piped',
-    env: { BASH_ENV: '$HOME/.bashrc' },
-  });
-  const result = await proc.output();
-  if (!result.status.success) {
-    const stderr = result.stderrText ?? '';
-    throw new Error(
-      `Sandbox command failed (exit ${result.status.code}): ${stderr || command}`,
-    );
-  }
-  return result.stdoutText ?? '';
 }
 
 // ============================================================================
@@ -360,11 +315,7 @@ export class CloudSandboxProvider implements SandboxProvider {
       }
 
       const message = (err as { message?: string })?.message ?? String(err);
-      if (
-        message.includes('limit') ||
-        message.includes('concurrent') ||
-        message.includes('quota')
-      ) {
+      if (isConcurrencyLimitError(message)) {
         const db = openSessionDb();
         const running = dbListSessions(db, {
           provider: 'cloud',
@@ -388,12 +339,12 @@ export class CloudSandboxProvider implements SandboxProvider {
         onProgress?.('Cloning repository');
         const fullName = options.repoInfo.fullName;
         const branchRef = `hermes/${options.branchName}`;
-        await spawnShell(
+        await sandboxExec(
           sandbox,
           `cd /work && gh auth setup-git && gh repo clone ${shellEscape(fullName)} app && cd app && git switch -c ${shellEscape(branchRef)}`,
         );
       } else {
-        await spawnShell(sandbox, 'mkdir -p /work/app');
+        await sandboxExec(sandbox, 'mkdir -p /work/app');
       }
 
       // 6. Run init script if configured (dynamic — may contain shell syntax).
@@ -403,7 +354,7 @@ export class CloudSandboxProvider implements SandboxProvider {
       // file and should be treated as trusted input.
       if (options.initScript) {
         onProgress?.('Running init script');
-        await spawnShell(sandbox, `cd /work/app && ${options.initScript}`);
+        await sandboxExec(sandbox, `cd /work/app && ${options.initScript}`);
       }
 
       // 7. Start agent process
@@ -418,13 +369,13 @@ export class CloudSandboxProvider implements SandboxProvider {
       if (options.interactive) {
         // Start agent inside a detached tmux session so it's ready for
         // the caller to attach via SSH later (provider.attach()).
-        await spawnShell(
+        await sandboxExec(
           sandbox,
           `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCommand)}`,
         );
       } else {
         // Detached mode: start agent in background
-        await spawnShell(
+        await sandboxExec(
           sandbox,
           `cd /work/app && nohup ${agentCommand} > /work/agent.log 2>&1 &`,
         );
@@ -508,12 +459,12 @@ export class CloudSandboxProvider implements SandboxProvider {
     try {
       // Inject credentials
       await injectCredentials(sandbox);
-      await spawnShell(sandbox, 'mkdir -p /work');
+      await sandboxExec(sandbox, 'mkdir -p /work');
 
       // Clone repo if available
       if (options.repoInfo && options.isGitRepo !== false) {
         const fullName = options.repoInfo.fullName;
-        await spawnShell(
+        await sandboxExec(
           sandbox,
           `cd /work && gh auth setup-git && gh repo clone ${shellEscape(fullName)} app`,
         );
@@ -619,11 +570,7 @@ export class CloudSandboxProvider implements SandboxProvider {
       }
 
       const message = (err as { message?: string })?.message ?? String(err);
-      if (
-        message.includes('limit') ||
-        message.includes('concurrent') ||
-        message.includes('quota')
-      ) {
+      if (isConcurrencyLimitError(message)) {
         const running = dbListSessions(db, {
           provider: 'cloud',
           status: 'running',
@@ -659,13 +606,13 @@ export class CloudSandboxProvider implements SandboxProvider {
 
       if (isInteractive) {
         // Start agent inside a detached tmux session (caller attaches via SSH)
-        await spawnShell(
+        await sandboxExec(
           sandbox,
           `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCmd)}`,
         );
       } else {
         // Detached: run agent in background
-        await spawnShell(
+        await sandboxExec(
           sandbox,
           `cd /work/app && nohup ${agentCmd} > /work/agent.log 2>&1 &`,
         );

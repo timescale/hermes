@@ -109,6 +109,11 @@ export function formatShellError(error: ShellError): Error {
   );
 }
 
+/** Escape a value for safe interpolation in a shell command string. */
+export function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export async function ensureGitignore(): Promise<void> {
   const gitignorePath = '.gitignore';
   const entry = '.hermes/';
