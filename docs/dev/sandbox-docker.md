@@ -8,6 +8,8 @@ Run these commands in order:
 
 ```bash
 # 1. Install Docker CE from Docker's official apt repository.
+#    NOTE: apt-get install will show an error about systemd-sysv — this is
+#    expected. The next command fixes it.
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
@@ -59,7 +61,7 @@ sudo update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
 #    DOCKER_INSECURE_NO_IPTABLES_RAW disables Direct Access Filtering, which
 #    requires the iptables "raw" table — not available in this kernel.
 DOCKER_INSECURE_NO_IPTABLES_RAW=1 sudo -E dockerd &>/tmp/dockerd.log &
-sleep 5
+timeout 30 bash -c 'until docker info &>/dev/null; do sleep 1; done'
 
 # 6. Allow the current user to use Docker without sudo
 sudo chmod 666 /var/run/docker.sock
@@ -72,7 +74,7 @@ docker run --rm alpine:latest echo "Docker is working!"
 
 ### Direct Access Filtering workaround
 
-Docker CE 28.0 introduced [Direct Access Filtering](https://docs.docker.com/engine/network/packet-filtering-firewalls/) which adds iptables rules to the `raw` table to prevent direct access to container IPs from outside the bridge network. The sandbox kernel does not support the `raw` iptable, so container creation fails with:
+Docker CE 28.0+ includes [Direct Access Filtering](https://docs.docker.com/engine/network/packet-filtering-firewalls/) which adds iptables rules to the `raw` table to prevent direct access to container IPs from outside the bridge network. The sandbox kernel does not support the `raw` iptable, so container creation fails with:
 
 ```
 Unable to enable DIRECT ACCESS FILTERING - DROP rule:
@@ -94,6 +96,8 @@ failed to get new shm lock manager: failed to create 2048 locks in /libpod_lock:
 ### cgroup v1 Controllers
 
 The sandbox's `/sys/fs/cgroup` is backed by sysfs with no controllers available. Docker/runc needs cgroup v1 controllers (memory, cpu, pids, etc.) to manage container resources. We mount a tmpfs over `/sys/fs/cgroup` first (since sysfs is read-only and doesn't allow creating subdirectories), then mount individual cgroup v1 controllers. Without them:
+
+> **Note:** Docker has [deprecated cgroup v1 support](https://github.com/moby/moby/issues/51111) and plans to remove it by May 2029. This setup will need to migrate to cgroup v2 before then.
 
 ```
 no cgroup mount found in mountinfo
