@@ -273,6 +273,12 @@ export class CloudSandboxProvider implements SandboxProvider {
   // --------------------------------------------------------------------------
 
   async create(options: CreateSandboxOptions): Promise<HermesSession> {
+    if (options.mountDir) {
+      log.warn(
+        'Mount mode is not supported for cloud sandboxes — ignoring mountDir',
+      );
+    }
+
     const { onProgress } = options;
     const client = await this.getClient();
     const region = await this.resolveRegion();

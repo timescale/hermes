@@ -346,9 +346,22 @@ function SessionsApp({
 
         const { isGitRepo: inGitRepo } = propsRef.current;
 
-        // Force mount mode if not in a git repo
+        // Force mount mode if not in a git repo (Docker only — cloud
+        // sandboxes don't support mount mode and always clone from GitHub).
         const mountDir =
-          passedMountDir ?? (!inGitRepo ? process.cwd() : undefined);
+          activeProvider.type === 'cloud'
+            ? undefined
+            : (passedMountDir ?? (!inGitRepo ? process.cwd() : undefined));
+
+        // Cloud sandboxes require a git repo (no mount mode support)
+        if (activeProvider.type === 'cloud' && !inGitRepo) {
+          showToast(
+            'Cloud sandboxes require a git remote. Use Docker for non-git directories.',
+            'error',
+          );
+          setView({ type: 'prompt' });
+          return;
+        }
 
         if (!agentAuthValid) {
           // Exit TUI to run interactive login, then retry

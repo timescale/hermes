@@ -220,24 +220,56 @@ export function PromptScreen({
         title: `${mountMode ? 'Disable' : 'Enable'} local mount mode`,
         description: forceMountMode
           ? 'Mount mode is required (no git remote)'
-          : 'Toggle between git clone and local directory mount',
+          : sandboxProvider === 'cloud'
+            ? 'Mount mode is not available with cloud sandboxes'
+            : 'Toggle between git clone and local directory mount',
         category: 'Prompt',
         keybind: { key: 'd', ctrl: true },
-        enabled: !forceMountMode,
-        onSelect: () =>
+        enabled: !forceMountMode && sandboxProvider !== 'cloud',
+        onSelect: () => {
+          if (sandboxProvider === 'cloud') {
+            setToast({
+              message: 'Mount mode is not available with cloud sandboxes',
+              type: 'warning',
+            });
+            return;
+          }
           setMountMode((m) => {
             if (!m) setMountDir(process.cwd());
             return !m;
-          }),
+          });
+        },
       },
       {
         id: 'provider.toggle',
         title: `Switch to ${sandboxProvider === 'docker' ? 'cloud' : 'Docker'} provider`,
-        description: 'Toggle between Docker and Cloud sandbox providers',
+        description:
+          forceMountMode && sandboxProvider === 'docker'
+            ? 'Cloud sandboxes require a git remote'
+            : 'Toggle between Docker and Cloud sandbox providers',
         category: 'Prompt',
         keybind: { key: 'e', ctrl: true },
-        onSelect: () =>
-          setSandboxProvider((p) => (p === 'docker' ? 'cloud' : 'docker')),
+        enabled: !(forceMountMode && sandboxProvider === 'docker'),
+        onSelect: () => {
+          if (forceMountMode && sandboxProvider === 'docker') {
+            setToast({
+              message:
+                'Cloud sandboxes require a git remote. Add a remote or use Docker.',
+              type: 'warning',
+            });
+            return;
+          }
+          setSandboxProvider((p) => {
+            if (p === 'docker') {
+              // Switching to cloud — disable mount mode (not supported)
+              if (mountMode && !forceMountMode) {
+                setMountMode(false);
+              }
+              return 'cloud';
+            }
+            return 'docker';
+          });
+        },
       },
       {
         id: 'theme.select',
@@ -320,9 +352,11 @@ export function PromptScreen({
         name: 'mount',
         description: forceMountMode
           ? 'Local mount mode required'
-          : mountMode
-            ? 'Disable local mount mode (use git clone)'
-            : 'Enable local mount mode (use local directory)',
+          : sandboxProvider === 'cloud'
+            ? 'Mount mode is not available with cloud sandboxes'
+            : mountMode
+              ? 'Disable local mount mode (use git clone)'
+              : 'Enable local mount mode (use local directory)',
         onSelect: () => {
           setShowSlashCommands(false);
           setSlashQuery('');
@@ -331,6 +365,14 @@ export function PromptScreen({
           }
           // Don't allow toggling mount mode off when forced
           if (forceMountMode) {
+            return;
+          }
+          // Don't allow mount mode with cloud sandboxes
+          if (sandboxProvider === 'cloud') {
+            setToast({
+              message: 'Mount mode is not available with cloud sandboxes',
+              type: 'warning',
+            });
             return;
           }
           setMountMode((m) => {
@@ -344,12 +386,26 @@ export function PromptScreen({
       },
       {
         name: 'cloud',
-        description: 'Use cloud sandbox provider',
+        description: forceMountMode
+          ? 'Cloud sandboxes require a git remote'
+          : 'Use cloud sandbox provider',
         onSelect: () => {
           setShowSlashCommands(false);
           setSlashQuery('');
           if (textareaRef.current) {
             textareaRef.current.clear();
+          }
+          if (forceMountMode) {
+            setToast({
+              message:
+                'Cloud sandboxes require a git remote. Add a remote or use Docker.',
+              type: 'warning',
+            });
+            return;
+          }
+          // Disable mount mode when switching to cloud
+          if (mountMode) {
+            setMountMode(false);
           }
           setSandboxProvider('cloud');
         },
@@ -375,7 +431,24 @@ export function PromptScreen({
           if (textareaRef.current) {
             textareaRef.current.clear();
           }
-          setSandboxProvider((p) => (p === 'docker' ? 'cloud' : 'docker'));
+          if (forceMountMode && sandboxProvider === 'docker') {
+            setToast({
+              message:
+                'Cloud sandboxes require a git remote. Add a remote or use Docker.',
+              type: 'warning',
+            });
+            return;
+          }
+          setSandboxProvider((p) => {
+            if (p === 'docker') {
+              // Switching to cloud — disable mount mode
+              if (mountMode && !forceMountMode) {
+                setMountMode(false);
+              }
+              return 'cloud';
+            }
+            return 'docker';
+          });
         },
       },
       {
@@ -422,6 +495,7 @@ export function PromptScreen({
       switchAgent,
       mountMode,
       forceMountMode,
+      sandboxProvider,
     ],
   );
 
