@@ -829,6 +829,7 @@ export async function getContainerStats(
 
   try {
     for await (const line of $`docker stats --no-stream --format ${'{{json .}}'} ${containerIds}`.lines()) {
+      if (!line) continue;
       try {
         const data: DockerStatsJson = JSON.parse(line);
         const id = data.ID.slice(0, 12);
