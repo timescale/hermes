@@ -897,7 +897,45 @@ export class CloudSandboxProvider implements SandboxProvider {
       const token = await getDenoToken();
       if (!token) return;
 
-      const sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
+      let sandbox: Sandbox | null = null;
+      const MAX_CONNECT_ATTEMPTS = 5;
+      const CONNECT_RETRY_BASE_MS = 2_000;
+
+      for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt++) {
+        if (signal.aborted) return;
+        try {
+          sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
+          break;
+        } catch (err) {
+          log.warn(
+            { err, attempt, maxAttempts: MAX_CONNECT_ATTEMPTS, sessionId },
+            'Failed to connect to sandbox for log streaming',
+          );
+          if (attempt >= MAX_CONNECT_ATTEMPTS) {
+            throw new Error(
+              `Failed to connect to sandbox after ${MAX_CONNECT_ATTEMPTS} attempts: ${err}`,
+            );
+          }
+          // Exponential back-off before retrying
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) {
+              resolve();
+              return;
+            }
+            const delay = CONNECT_RETRY_BASE_MS * attempt;
+            const timer = setTimeout(resolve, delay);
+            signal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+              { once: true },
+            );
+          });
+        }
+      }
+      if (!sandbox) return;
 
       // Byte offset into the log file (tracks how far we have read).
       let byteOffset = 0;

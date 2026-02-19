@@ -24,6 +24,13 @@ export function LogViewer({
   const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
   const streamRef = useRef<LogStream | null>(null);
 
+  // Use refs for callbacks to avoid restarting the stream when parent
+  // re-renders with a new function identity (e.g. from inline arrows).
+  const streamLogsRef = useRef(streamLogs);
+  streamLogsRef.current = streamLogs;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
   // Load initial logs and start streaming for running containers
   // Skip for interactive sessions since their logs are TUI state, not text
   useEffect(() => {
@@ -37,7 +44,7 @@ export function LogViewer({
     async function loadLogs() {
       try {
         setLines([]);
-        const stream = streamLogs(containerId);
+        const stream = streamLogsRef.current(containerId);
         streamRef.current = stream;
         setLoading(false);
 
@@ -49,16 +56,16 @@ export function LogViewer({
               setLines((prev) => [...prev, line]);
             }
           } catch (err) {
-            if (mounted && onError) {
-              onError(`Log stream error: ${err}`);
+            if (mounted && onErrorRef.current) {
+              onErrorRef.current(`Log stream error: ${err}`);
             }
           }
         })();
       } catch (err) {
         if (mounted) {
           setLoading(false);
-          if (onError) {
-            onError(`Failed to load logs: ${err}`);
+          if (onErrorRef.current) {
+            onErrorRef.current(`Failed to load logs: ${err}`);
           }
         }
       }
@@ -73,7 +80,7 @@ export function LogViewer({
         streamRef.current = null;
       }
     };
-  }, [containerId, streamLogs, isInteractive, onError]);
+  }, [containerId, isInteractive]);
 
   useKeyboard((key) => {
     if (key.name === 'up' || key.raw === 'k') {
