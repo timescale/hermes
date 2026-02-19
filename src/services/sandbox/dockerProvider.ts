@@ -41,7 +41,7 @@ import type {
  * 'created' -> 'unknown' (never started),
  * all others ('paused', 'restarting', 'dead') -> 'stopped'.
  */
-function mapDockerSession(docker: DockerSession): HermesSession {
+export function mapDockerSession(docker: DockerSession): HermesSession {
   let status: HermesSession['status'];
   switch (docker.status) {
     case 'running':
@@ -83,7 +83,7 @@ function mapDockerSession(docker: DockerSession): HermesSession {
 /**
  * Map Docker ContainerStats to the unified SandboxStats type.
  */
-function mapDockerStats(
+export function mapDockerStats(
   stats: Map<
     string,
     {

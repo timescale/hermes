@@ -39,7 +39,9 @@ export function getStatusIcon(session: HermesSession): string {
 
 export function getStatusText(session: HermesSession): string {
   if (session.status === 'exited') {
-    return session.exitCode === 0 ? 'complete' : `failed (${session.exitCode})`;
+    if (session.exitCode === 0) return 'complete';
+    if (session.exitCode == null) return 'exited';
+    return `failed (${session.exitCode})`;
   }
   return session.status;
 }

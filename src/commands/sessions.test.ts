@@ -119,6 +119,15 @@ describe('getStatusDisplay', () => {
     expect(display).toContain('unknown');
     expect(display).toContain('\x1b[90m'); // gray ANSI code
   });
+
+  test('shows yellow "exited" when exitCode is undefined (not "failed (undefined)")', () => {
+    const session = makeSession('exited', undefined);
+    const display = getStatusDisplay(session);
+    expect(display).toContain('exited');
+    expect(display).toContain('\x1b[33m'); // yellow ANSI code
+    expect(display).not.toContain('undefined');
+    expect(display).not.toContain('failed');
+  });
 });
 
 describe('truncate', () => {
