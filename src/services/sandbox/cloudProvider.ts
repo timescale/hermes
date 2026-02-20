@@ -76,6 +76,211 @@ async function injectCredentials(sandbox: Sandbox): Promise<void> {
 }
 
 // ============================================================================
+// Sandbox Logging
+// ============================================================================
+
+/** Append a timestamped status line to the agent log inside the sandbox. */
+async function logToSandbox(sandbox: Sandbox, message: string): Promise<void> {
+  try {
+    // Use shell append (>>) for atomicity — avoids racing with the agent
+    // process which also appends to this file.
+    await sandboxExec(
+      sandbox,
+      `echo ${shellEscape(message)} >> /work/agent.log`,
+    );
+  } catch {
+    // Best-effort — don't crash provisioning if logging fails
+  }
+}
+
+// ============================================================================
+// Cloud Resource Cleanup
+// ============================================================================
+
+/**
+ * Best-effort cleanup of cloud sandbox resources after a failure.
+ * Closes the WebSocket, kills the sandbox (freeing the concurrency slot),
+ * deletes the volume, and marks the session as exited in SQLite.
+ */
+async function cleanupSandboxResources(
+  sandbox: Sandbox,
+  client: DenoApiClient,
+  sessionId: string,
+  volumeSlug: string,
+): Promise<void> {
+  try {
+    await sandbox.close();
+  } catch (err) {
+    log.debug({ err, sessionId }, 'Failed to close sandbox WebSocket');
+  }
+  try {
+    await client.killSandbox(sessionId);
+  } catch (err) {
+    log.debug({ err, sessionId }, 'Failed to kill sandbox during cleanup');
+  }
+  try {
+    await client.deleteVolume(volumeSlug);
+  } catch (err) {
+    log.debug(
+      { err, sessionId, volumeSlug },
+      'Failed to delete volume during cleanup',
+    );
+  }
+  try {
+    const db = openSessionDb();
+    updateSessionStatus(db, sessionId, 'exited');
+  } catch (err) {
+    log.debug({ err, sessionId }, 'Failed to mark session as exited');
+  }
+}
+
+// ============================================================================
+// Provisioning Helpers
+// ============================================================================
+
+/**
+ * Run provisioning steps 4-7 (credentials, repo clone, init script, agent
+ * start) inside an already-booted sandbox. On success the WebSocket
+ * connection is closed. On failure resources are torn down and the session
+ * is marked as exited.
+ */
+async function provisionSandbox(
+  sandbox: ResolvedSandbox,
+  client: DenoApiClient,
+  sessionId: string,
+  volumeSlug: string,
+  options: CreateSandboxOptions,
+): Promise<void> {
+  const { onProgress } = options;
+
+  try {
+    await logToSandbox(sandbox, 'Provisioning sandbox environment...');
+
+    // Inject credential files
+    onProgress?.('Setting up credentials');
+    await logToSandbox(sandbox, 'Setting up credentials...');
+    await injectCredentials(sandbox);
+
+    // Clone repo and create branch
+    if (options.repoInfo && options.isGitRepo !== false) {
+      const fullName = options.repoInfo.fullName;
+      onProgress?.('Cloning repository');
+      await logToSandbox(sandbox, `Cloning repository ${fullName}...`);
+      const branchRef = `hermes/${options.branchName}`;
+      await sandboxExec(
+        sandbox,
+        `cd /work && gh auth setup-git && gh repo clone ${shellEscape(fullName)} app && cd app && git switch -c ${shellEscape(branchRef)}`,
+      );
+    } else {
+      await sandboxExec(sandbox, 'mkdir -p /work/app');
+    }
+
+    // Run init script if configured
+    if (options.initScript) {
+      onProgress?.('Running init script');
+      await logToSandbox(sandbox, 'Running init script...');
+      await sandboxExec(sandbox, `cd /work/app && ${options.initScript}`);
+    }
+
+    // Start agent process
+    onProgress?.('Starting agent');
+    await logToSandbox(sandbox, 'Starting agent...');
+    const agentCommand = buildAgentCommand({
+      agent: options.agent,
+      mode: options.interactive ? 'interactive' : 'detached',
+      model: options.model,
+      agentArgs: options.agentArgs,
+      prompt: options.prompt,
+    });
+    if (options.interactive) {
+      await sandboxExec(
+        sandbox,
+        `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCommand)}`,
+      );
+    } else {
+      await sandboxExec(
+        sandbox,
+        `cd /work/app && nohup ${agentCommand} >> /work/agent.log 2>&1 &`,
+      );
+    }
+
+    // Close our WebSocket connection — the sandbox keeps running
+    await sandbox.close();
+  } catch (err) {
+    // Setup failed — tear down cloud sandbox and volume so we don't
+    // leak resources (especially important given the 5-sandbox limit).
+    const message = err instanceof Error ? err.message : String(err);
+    await logToSandbox(sandbox, `ERROR: Provisioning failed — ${message}`);
+    await cleanupSandboxResources(sandbox, client, sessionId, volumeSlug);
+    throw err;
+  }
+}
+
+/**
+ * Run provisioning steps for a resumed session (credentials + agent start).
+ * On success the WebSocket connection is closed. On failure resources are
+ * cleaned up and the session is marked as exited.
+ */
+async function provisionResume(
+  sandbox: ResolvedSandbox,
+  client: DenoApiClient,
+  sessionId: string,
+  volumeSlug: string,
+  options: ResumeSandboxOptions & { agent: AgentType; existingModel?: string },
+): Promise<void> {
+  const { onProgress } = options;
+
+  try {
+    await logToSandbox(sandbox, 'Resuming session...');
+
+    // Inject fresh credentials
+    onProgress?.('Setting up credentials');
+    await logToSandbox(sandbox, 'Setting up credentials...');
+    await injectCredentials(sandbox);
+
+    // Start agent with continue flag
+    const model = options.model ?? options.existingModel;
+    const isInteractive =
+      options.mode === 'interactive' || options.mode === 'shell';
+
+    onProgress?.('Starting agent');
+    await logToSandbox(sandbox, 'Starting agent...');
+    const agentCmd = buildAgentCommand({
+      agent: options.agent,
+      mode: isInteractive ? 'interactive' : 'detached',
+      model,
+      agentArgs: options.agentArgs,
+      continue: true,
+      prompt: isInteractive ? undefined : options.prompt,
+    });
+
+    if (isInteractive) {
+      await sandboxExec(
+        sandbox,
+        `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCmd)}`,
+      );
+    } else {
+      await sandboxExec(
+        sandbox,
+        `cd /work/app && nohup ${agentCmd} >> /work/agent.log 2>&1 &`,
+      );
+    }
+
+    // Close our WebSocket connection — the sandbox keeps running
+    await sandbox.close();
+  } catch (err) {
+    // Resume failed — tear down cloud resources and mark session as exited
+    const message = err instanceof Error ? err.message : String(err);
+    await logToSandbox(
+      sandbox,
+      `ERROR: Resume provisioning failed — ${message}`,
+    );
+    await cleanupSandboxResources(sandbox, client, sessionId, volumeSlug);
+    throw err;
+  }
+}
+
+// ============================================================================
 // SSH Helper
 // ============================================================================
 
@@ -340,82 +545,7 @@ export class CloudSandboxProvider implements SandboxProvider {
       throw err;
     }
 
-    try {
-      // 4. Inject credential files
-      onProgress?.('Setting up credentials');
-      await injectCredentials(sandbox);
-
-      // 5. Clone repo and create branch
-      if (options.repoInfo && options.isGitRepo !== false) {
-        onProgress?.('Cloning repository');
-        const fullName = options.repoInfo.fullName;
-        const branchRef = `hermes/${options.branchName}`;
-        await sandboxExec(
-          sandbox,
-          `cd /work && gh auth setup-git && gh repo clone ${shellEscape(fullName)} app && cd app && git switch -c ${shellEscape(branchRef)}`,
-        );
-      } else {
-        await sandboxExec(sandbox, 'mkdir -p /work/app');
-      }
-
-      // 6. Run init script if configured (dynamic — may contain shell syntax).
-      // NOTE: initScript is intentionally interpolated without escaping — it IS
-      // a shell command (like a post-create hook) and is expected to contain
-      // arbitrary shell syntax.  The value comes from the user's own config
-      // file and should be treated as trusted input.
-      if (options.initScript) {
-        onProgress?.('Running init script');
-        await sandboxExec(sandbox, `cd /work/app && ${options.initScript}`);
-      }
-
-      // 7. Start agent process
-      onProgress?.('Starting agent');
-      const agentCommand = buildAgentCommand({
-        agent: options.agent,
-        mode: options.interactive ? 'interactive' : 'detached',
-        model: options.model,
-        agentArgs: options.agentArgs,
-        prompt: options.prompt,
-      });
-      if (options.interactive) {
-        // Start agent inside a detached tmux session so it's ready for
-        // the caller to attach via SSH later (provider.attach()).
-        await sandboxExec(
-          sandbox,
-          `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCommand)}`,
-        );
-      } else {
-        // Detached mode: start agent in background
-        await sandboxExec(
-          sandbox,
-          `cd /work/app && nohup ${agentCommand} > /work/agent.log 2>&1 &`,
-        );
-      }
-    } catch (err) {
-      // Setup failed — tear down the cloud sandbox and volume so we don't
-      // leak resources (especially important given the 5-sandbox limit).
-      try {
-        await sandbox.close();
-      } catch {
-        // best-effort
-      }
-      try {
-        await client.killSandbox(sandbox.resolvedId || sandbox.id);
-      } catch {
-        // best-effort
-      }
-      try {
-        await client.deleteVolume(rootVolume.id);
-      } catch {
-        // best-effort
-      }
-      throw err;
-    }
-
-    // Close our WebSocket connection — the sandbox keeps running
-    await sandbox.close();
-
-    // 8. Record in SQLite
+    // Record in SQLite immediately after boot (before provisioning)
     const sessionId = sandbox.resolvedId || sandbox.id;
     if (!sessionId) {
       throw new Error(
@@ -441,6 +571,29 @@ export class CloudSandboxProvider implements SandboxProvider {
 
     const db = openSessionDb();
     upsertSession(db, session);
+
+    // 4-7. Provision sandbox (credentials, repo clone, init script, agent)
+    if (options.interactive) {
+      // Interactive sessions: caller needs SSH ready, so await provisioning
+      await provisionSandbox(
+        sandbox,
+        client,
+        sessionId,
+        rootVolume.slug,
+        options,
+      );
+    } else {
+      // Non-interactive: fire-and-forget so we return to session details early
+      provisionSandbox(
+        sandbox,
+        client,
+        sessionId,
+        rootVolume.slug,
+        options,
+      ).catch((err) =>
+        log.error({ err, sessionId }, 'Background provisioning failed'),
+      );
+    }
 
     return session;
   }
@@ -594,51 +747,16 @@ export class CloudSandboxProvider implements SandboxProvider {
       throw err;
     }
 
-    try {
-      // 3. Inject fresh credentials
-      onProgress?.('Setting up credentials');
-      await injectCredentials(sandbox);
-
-      // 4. Start agent with continue flag
-      const agent = existing.agent as AgentType;
-      const model = options.model ?? existing.model;
-      const isInteractive =
-        options.mode === 'interactive' || options.mode === 'shell';
-
-      onProgress?.('Starting agent');
-      const agentCmd = buildAgentCommand({
-        agent,
-        mode: isInteractive ? 'interactive' : 'detached',
-        model,
-        agentArgs: options.agentArgs,
-        continue: true,
-        prompt: isInteractive ? undefined : options.prompt,
-      });
-
-      if (isInteractive) {
-        // Start agent inside a detached tmux session (caller attaches via SSH)
-        await sandboxExec(
-          sandbox,
-          `tmux new-session -d -s ${TMUX_SESSION} -c /work/app ${shellEscape(agentCmd)}`,
-        );
-      } else {
-        // Detached: run agent in background
-        await sandboxExec(
-          sandbox,
-          `cd /work/app && nohup ${agentCmd} > /work/agent.log 2>&1 &`,
-        );
-      }
-    } finally {
-      await sandbox.close();
-    }
-
-    // 5. Update SQLite
+    // Record in SQLite immediately after boot (before provisioning)
     const resumeSessionId = sandbox.resolvedId || sandbox.id;
     if (!resumeSessionId) {
       throw new Error(
         'Cannot persist resumed session: sandbox has no resolvedId or id',
       );
     }
+
+    const isInteractive =
+      options.mode === 'interactive' || options.mode === 'shell';
 
     const newSession: HermesSession = {
       id: resumeSessionId,
@@ -651,12 +769,44 @@ export class CloudSandboxProvider implements SandboxProvider {
       branch: existing.branch,
       repo: existing.repo,
       created: new Date().toISOString(),
-      interactive: options.mode === 'interactive' || options.mode === 'shell',
+      interactive: isInteractive,
       region,
       volumeSlug: bootVolumeSlug,
       resumedFrom: sessionId,
     };
     upsertSession(db, newSession);
+
+    // 3-4. Provision resume (credentials + agent start)
+    const resumeProvisionOptions = {
+      ...options,
+      agent: existing.agent as AgentType,
+      existingModel: existing.model,
+    };
+
+    if (isInteractive) {
+      // Interactive/shell: caller needs SSH ready, so await provisioning
+      await provisionResume(
+        sandbox,
+        client,
+        resumeSessionId,
+        bootVolumeSlug,
+        resumeProvisionOptions,
+      );
+    } else {
+      // Detached: fire-and-forget so we return to session details early
+      provisionResume(
+        sandbox,
+        client,
+        resumeSessionId,
+        bootVolumeSlug,
+        resumeProvisionOptions,
+      ).catch((err) =>
+        log.error(
+          { err, sessionId: resumeSessionId },
+          'Background resume provisioning failed',
+        ),
+      );
+    }
 
     return newSession;
   }
