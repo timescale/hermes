@@ -16,9 +16,10 @@ export const LintOnSave: Plugin = async ({ $ }) => {
 
       try {
         await $`./bun run lint --write ${filePath}`.quiet();
-      } catch (err: any) {
+      } catch (err) {
+        const e = err as { stderr?: { toString(): string }; message?: string };
         const stderr =
-          err?.stderr?.toString() ?? err?.message ?? 'Unknown lint error';
+          e?.stderr?.toString() ?? e?.message ?? 'Unknown lint error';
         output.output += `\n\nLint errors in ${filePath}:\n${stderr}`;
       }
     },

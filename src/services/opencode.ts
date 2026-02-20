@@ -1,7 +1,10 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { file } from 'bun';
+import type { AuthEntry, OpencodeAuthJson } from '../types/agentConfig';
 import { Deferred } from '../types/deferred';
+import { readCache, writeCache } from './cache';
+import { getClaudeApiKey, getClaudeCredentialsJson } from './claude';
 import { readConfig } from './config';
 import { CONTAINER_HOME, readFileFromContainer } from './dockerFiles';
 import { getHermesSecret, setHermesSecret } from './keyring';
@@ -21,22 +24,20 @@ const containerPaths = {
   authJson: join(CONTAINER_HOME, '.local', 'share', 'opencode', 'auth.json'),
 };
 
-// Keyed by provider name; each value has at least an optional `expires` timestamp
-type OpencodeAuthJson = Partial<
-  Record<string, { expires?: number; refresh?: string }>
->;
+const authEntryValid = (entry?: AuthEntry | null): boolean => {
+  if (!entry) return false;
+  if (entry.type === 'api') return !!entry.key;
+  if (entry.type === 'oauth') {
+    if (entry.refresh) return true; // if we have a refresh token, we can get a new access token
+    if (entry.expires && entry.expires < Date.now()) return false;
+    return !!entry.access;
+  }
+  return false;
+};
 
 const authCredsValid = (creds?: OpencodeAuthJson | null): boolean => {
   if (!creds) return false;
-  const entries = Object.entries(creds);
-  if (entries.length === 0) return false;
-  // At least one key with a non-expired entry
-  return entries.some(([_key, entry]) => {
-    if (!entry) return false;
-    if (entry.refresh) return true; // if we have a refresh token, we can get a new access token
-    if (entry.expires && entry.expires < Date.now()) return false;
-    return true;
-  });
+  return Object.values(creds).some(authEntryValid);
 };
 
 /**
@@ -100,10 +101,7 @@ const mergeCredentials = async (): Promise<OpencodeAuthJson> => {
   const keys = new Set([...Object.keys(cached), ...Object.keys(host)]);
   let changed = false;
   for (const key of keys) {
-    if (
-      host[key] &&
-      (!cached[key] || (cached[key]?.expires || 0) < (host[key]?.expires || 0))
-    ) {
+    if (authEntryValid(host[key]) && !authEntryValid(cached[key])) {
       log.debug(
         `Adding missing or outdated key "${key}" to opencode credential cache from host`,
       );
@@ -111,10 +109,45 @@ const mergeCredentials = async (): Promise<OpencodeAuthJson> => {
       changed = true;
     }
   }
+  if (!authEntryValid(cached.anthropic)) {
+    const credsJson = await getClaudeCredentialsJson();
+    if (credsJson?.claudeAiOauth?.accessToken) {
+      cached.anthropic = {
+        type: 'oauth',
+        refresh: credsJson.claudeAiOauth.refreshToken,
+        access: credsJson.claudeAiOauth.accessToken,
+        expires: credsJson.claudeAiOauth.expiresAt,
+      };
+      changed = true;
+    } else {
+      const apiKey = await getClaudeApiKey();
+      if (apiKey) {
+        cached.anthropic = {
+          type: 'api',
+          key: apiKey,
+        };
+        changed = true;
+      }
+    }
+  }
   if (changed) {
     await writeHermesCredentialCache(cached);
   }
   return cached;
+};
+
+export const getOpencodeAuthJson = async (
+  force = false,
+): Promise<OpencodeAuthJson> => {
+  if (!force) {
+    const cached = readCache('opencodeAuthJson');
+    if (cached) {
+      return cached.value;
+    }
+  }
+  const merged = await mergeCredentials();
+  writeCache('opencodeAuthJson', merged);
+  return merged;
 };
 
 const captureOpencodeCredentialsFromContainer = async (
@@ -129,6 +162,7 @@ const captureOpencodeCredentialsFromContainer = async (
     if (authCredsValid(creds)) {
       log.debug('Valid opencode credentials found in container');
       await writeHermesCredentialCache(creds);
+      writeCache('opencodeAuthJson', creds);
       return true;
     }
     log.debug('Invalid opencode credentials found in container');
@@ -142,7 +176,7 @@ const captureOpencodeCredentialsFromContainer = async (
  * Get the opencode auth config as VirtualFile(s) to write into containers.
  */
 export const getOpencodeConfigFiles = async (): Promise<VirtualFile[]> => {
-  const creds = await mergeCredentials();
+  const creds = await getOpencodeAuthJson();
   return [
     {
       path: containerPaths.authJson,
