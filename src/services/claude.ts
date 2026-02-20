@@ -2,7 +2,9 @@ import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { file } from 'bun';
 import { runClaudeAuthScreen } from '../components/ClaudeAuth';
+import type { ClaudeCredentialsJson } from '../types/agentConfig';
 import { Deferred } from '../types/deferred';
+import { readCache, writeCache } from './cache';
 import { CONTAINER_HOME, readFileFromContainer } from './dockerFiles';
 import { getHermesSecret, getSecret, setHermesSecret } from './keyring';
 import { log } from './logger';
@@ -22,14 +24,6 @@ const containerPaths = {
   credentialsJson: join(CONTAINER_HOME, '.claude', '.credentials.json'),
   configJson: join(CONTAINER_HOME, '.claude.json'),
 };
-
-interface ClaudeCredentialsJson {
-  claudeAiOauth?: {
-    accessToken?: string;
-    refreshToken?: string;
-    expiresAt?: number;
-  };
-}
 
 const claudeCredsValid = (creds?: ClaudeCredentialsJson | null): boolean => {
   if (!creds?.claudeAiOauth?.accessToken) return false;
@@ -88,12 +82,6 @@ const readHermesCredentialCache =
     return null;
   };
 
-const writeHermesCredentialCache = async (
-  creds: ClaudeCredentialsJson,
-): Promise<void> => {
-  await setHermesSecret(HERMES_CREDS_ACCOUNT, JSON.stringify(creds));
-};
-
 const captureClaudeCredentialsJsonFromContainer = async (
   containerId: string,
 ): Promise<boolean> => {
@@ -105,7 +93,8 @@ const captureClaudeCredentialsJsonFromContainer = async (
     const creds = JSON.parse(content) as ClaudeCredentialsJson;
     if (claudeCredsValid(creds)) {
       log.debug('Valid claude credentials found in container');
-      await writeHermesCredentialCache(creds);
+      await setHermesSecret(HERMES_CREDS_ACCOUNT, JSON.stringify(creds));
+      writeCache('claudeCredentialsJson', creds);
       return true;
     }
     log.debug('Invalid claude credentials found in container');
@@ -181,10 +170,6 @@ const readHermesApiKeyCache = async (): Promise<string | null> => {
   return null;
 };
 
-const writeHermesApiKeyCache = async (key: string): Promise<void> => {
-  await setHermesSecret(HERMES_APIKEY_ACCOUNT, key);
-};
-
 export const captureClaudeApiKeyFromContainer = async (
   containerId: string,
 ): Promise<boolean> => {
@@ -196,7 +181,8 @@ export const captureClaudeApiKeyFromContainer = async (
     const config = JSON.parse(content) as ClaudeConfigJson;
     if (config.primaryApiKey) {
       log.debug('Claude API key found in container');
-      await writeHermesApiKeyCache(config.primaryApiKey);
+      await setHermesSecret(HERMES_APIKEY_ACCOUNT, config.primaryApiKey);
+      writeCache('claudeApiKey', config.primaryApiKey);
       return true;
     }
   } catch {
@@ -214,11 +200,40 @@ export const captureClaudeCredentialsFromContainer = async (
   );
 };
 
+export const getClaudeCredentialsJson = async (
+  force = false,
+): Promise<ClaudeCredentialsJson | null> => {
+  if (!force) {
+    const cached = readCache('claudeCredentialsJson');
+    if (cached) {
+      log.trace('Using cached claude credentials');
+      return cached.value;
+    }
+  }
+  const creds =
+    (await readHostCredentials()) || (await readHermesCredentialCache());
+  writeCache('claudeCredentialsJson', creds);
+  return creds;
+};
+
+export const getClaudeApiKey = async (
+  force = false,
+): Promise<string | null> => {
+  if (!force) {
+    const cached = readCache('claudeApiKey');
+    if (cached) {
+      log.trace('Using cached claude API key');
+      return cached.value;
+    }
+  }
+  const key = (await readHostConfigApiKey()) || (await readHermesApiKeyCache());
+  writeCache('claudeApiKey', key);
+  return key;
+};
+
 export const getClaudeConfigFiles = async (): Promise<VirtualFile[]> => {
-  const creds: ClaudeCredentialsJson =
-    (await readHostCredentials()) || (await readHermesCredentialCache()) || {};
-  const apiKey =
-    (await readHostConfigApiKey()) || (await readHermesApiKeyCache());
+  const creds = (await getClaudeCredentialsJson()) || {};
+  const apiKey = await getClaudeApiKey();
   const config = {
     ...baseConfig,
     ...(apiKey ? { primaryApiKey: apiKey } : null),

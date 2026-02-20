@@ -89,10 +89,7 @@ program.addCommand(upgradeCommand);
 // This uses commander's hook system so it works regardless of how the command was
 // invoked (full name, alias, or abbreviation).
 if (isCompiledBinary()) {
-  const skipCommands = new Set([
-    upgradeCommand,
-    completionCommand,
-  ]);
+  const skipCommands = new Set([upgradeCommand, completionCommand]);
 
   for (const cmd of program.commands) {
     if (skipCommands.has(cmd)) continue;

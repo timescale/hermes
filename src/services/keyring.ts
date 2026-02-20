@@ -100,7 +100,7 @@ async function getSecretMac(
     const value = result.text().trim();
     return value || null;
   } catch (err) {
-    log.debug(
+    log.trace(
       { err, service, account },
       'Failed to read secret from macOS keychain',
     );
@@ -138,7 +138,7 @@ async function deleteSecretMac(
     await Bun.$`security delete-generic-password -s ${service} -a ${account}`.quiet();
   } catch (err) {
     // `security` exits non-zero if the entry doesn't exist; treat as success
-    log.debug(
+    log.trace(
       { err, service, account },
       'Failed to delete secret from macOS keychain (may not exist)',
     );
