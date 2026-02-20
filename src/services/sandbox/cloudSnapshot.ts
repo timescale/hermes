@@ -260,7 +260,158 @@ TMUX_EOF`,
       label: 'Chown /work to app user',
     });
 
-    // 13. Kill sandbox to detach the volume (required before snapshotting)
+    // -----------------------------------------------------------------------
+    // Docker-in-sandbox setup
+    // -----------------------------------------------------------------------
+    // The sandbox (Debian 13 / trixie) lacks Docker, cgroups, /dev/shm,
+    // and uses iptables-nft which doesn't work in this kernel.
+    // See docs/dev/sandbox-docker.md for full details.
+
+    // 13a. Add Docker's official apt repository (Debian trixie).
+    onProgress?.({
+      type: 'installing',
+      message: 'Installing Docker',
+      detail: 'docker-ce, containerd.io, docker-compose-plugin',
+    });
+    await sandboxExec(
+      sandbox,
+      `install -m 0755 -d /etc/apt/keyrings \
+&& curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+&& chmod a+r /etc/apt/keyrings/docker.asc \
+&& cat > /etc/apt/sources.list.d/docker.sources <<'DKRREPO'
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: trixie
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+DKRREPO
+`,
+      { label: 'Add Docker apt repository', sudo: true },
+    );
+
+    // 13b. Install Docker CE packages.  The install triggers a known
+    //      systemd-sysv failure (exit code 1) because /usr/sbin/init is
+    //      on a different filesystem in the sandbox.  We allow the
+    //      non-zero exit and fix the broken state in the next step.
+    await sandboxExec(
+      sandbox,
+      `DEBIAN_FRONTEND=noninteractive apt-get update \
+&& (DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin || true)`,
+      { label: 'Install Docker CE packages', sudo: true },
+    );
+
+    // 13c. Fix broken package state left by the systemd-sysv failure.
+    //      Purge packages that failed to configure (none are needed for
+    //      Docker) and finish configuring the rest.
+    await sandboxExec(
+      sandbox,
+      'dpkg --purge --force-depends libpam-systemd dbus-user-session docker-ce-rootless-extras 2>/dev/null; dpkg --configure -a',
+      { label: 'Fix broken packages after Docker install', sudo: true },
+    );
+
+    // 13d. Switch to iptables-legacy (nft backend requires kernel nftables
+    //      support that isn't available in this sandbox).
+    await sandboxExec(
+      sandbox,
+      'update-alternatives --set iptables /usr/sbin/iptables-legacy && update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy',
+      { label: 'Switch to iptables-legacy', sudo: true },
+    );
+
+    // 13e. Write a startup script that handles ephemeral setup (mounts and
+    //      daemon) that doesn't survive snapshot+restore.  This script is
+    //      idempotent and can be called multiple times safely.
+    await sandboxExec(
+      sandbox,
+      `cat > /usr/local/bin/start-docker.sh << 'STARTDKR'
+#!/usr/bin/env bash
+# Idempotent Docker daemon startup for the Deno sandbox environment.
+# Handles /dev/shm, cgroup v1 controllers, and dockerd.
+# See docs/dev/sandbox-docker.md for rationale.
+set -euo pipefail
+
+# Already running? Nothing to do.
+if docker info &>/dev/null 2>&1; then
+  exit 0
+fi
+
+# 1. Mount /dev/shm (needed for container runtime locking)
+sudo mkdir -p /dev/shm
+if ! mountpoint -q /dev/shm; then
+  sudo mount -t tmpfs tmpfs /dev/shm
+fi
+
+# 2. Mount cgroup v1 controllers (needed by runc)
+if [ "$(findmnt -n -o FSTYPE /sys/fs/cgroup 2>/dev/null)" != "tmpfs" ]; then
+  sudo mount -t tmpfs tmpfs /sys/fs/cgroup
+fi
+for subsys in memory cpu cpuacct cpuset devices freezer blkio pids; do
+  sudo mkdir -p /sys/fs/cgroup/$subsys
+  if ! mountpoint -q /sys/fs/cgroup/$subsys; then
+    sudo mount -t cgroup -o $subsys cgroup /sys/fs/cgroup/$subsys
+  fi
+done
+
+# 3. Start Docker daemon
+#    DOCKER_INSECURE_NO_IPTABLES_RAW disables Direct Access Filtering
+#    which requires the iptables "raw" table — not available in this kernel.
+DOCKER_INSECURE_NO_IPTABLES_RAW=1 sudo -E dockerd &>/tmp/dockerd.log &
+
+# 4. Wait for the socket to appear, then open it up for non-root usage
+#    before checking 'docker info' (which needs socket access).
+timeout 30 bash -c 'until [ -S /var/run/docker.sock ]; do sleep 0.5; done'
+sudo chmod 666 /var/run/docker.sock
+
+# 5. Wait for daemon to be fully ready (up to 30s)
+timeout 30 bash -c 'until docker info &>/dev/null 2>&1; do sleep 1; done'
+STARTDKR
+chmod +x /usr/local/bin/start-docker.sh`,
+      { label: 'Write Docker startup script', sudo: true },
+    );
+
+    // 13f. Add a profile.d hook so Docker starts automatically on login.
+    //      Uses a lockfile to avoid parallel startups from multiple shells.
+    await sandboxExec(
+      sandbox,
+      `cat > /etc/profile.d/docker-start.sh << 'PROFILED'
+# Auto-start Docker daemon on first login shell.
+# The startup script is idempotent but we use a lockfile to avoid
+# multiple concurrent shells all trying to start dockerd at once.
+if ! docker info &>/dev/null 2>&1; then
+  (
+    flock -n 9 || exit 0
+    /usr/local/bin/start-docker.sh &>/dev/null
+  ) 9>/tmp/.docker-start.lock
+fi
+PROFILED
+chmod +x /etc/profile.d/docker-start.sh`,
+      { label: 'Add Docker auto-start hook', sudo: true },
+    );
+
+    // 13g. Run the startup script now to verify Docker works and cache
+    //      the alpine image in the snapshot.  Best-effort: if the pull
+    //      times out (sandbox networking can be slow), we still proceed
+    //      with the snapshot — Docker will pull on first use at runtime.
+    onProgress?.({
+      type: 'installing',
+      message: 'Starting Docker and caching base image',
+    });
+    await sandboxExec(sandbox, '/usr/local/bin/start-docker.sh', {
+      label: 'Start Docker in build sandbox',
+    });
+    try {
+      await sandboxExec(sandbox, 'docker pull alpine:latest', {
+        label: 'Cache alpine image',
+      });
+    } catch (err) {
+      log.warn(
+        { err },
+        'Failed to cache alpine image — Docker will pull at runtime',
+      );
+    }
+
+    // 14. Kill sandbox to detach the volume (required before snapshotting)
     onProgress?.({
       type: 'snapshotting',
       message: 'Detaching volume',
@@ -291,7 +442,7 @@ TMUX_EOF`,
     // Without this delay, snapshotVolume can hit a 500 error.
     await new Promise((resolve) => setTimeout(resolve, 5_000));
 
-    // 13. Snapshot the volume
+    // 15. Snapshot the volume
     onProgress?.({
       type: 'snapshotting',
       message: 'Creating snapshot (this may take a moment)',
