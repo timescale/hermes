@@ -16,7 +16,7 @@ permissions:
 jobs:
   publish-docker:
     name: Publish Latest Docker Image
-    runs-on: non-prod
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
