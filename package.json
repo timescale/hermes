@@ -1,6 +1,7 @@
 {
   "name": "hermes",
   "version": "0.10.1",
+  "license": "Apache-2.0",
   "module": "index.ts",
   "scripts": {
     "build": "./bun build ./index.ts --compile --outfile ./bin/hermes",
@@ -26,7 +27,6 @@
   "bin": {
     "hermes": "./index.ts"
   },
-  "private": true,
   "type": "module",
   "dependencies": {
     "@bomb.sh/tab": "^0.0.12",
