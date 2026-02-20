@@ -53,6 +53,27 @@ function isConcurrencyLimitError(message: string): boolean {
   );
 }
 
+/** Check whether an error indicates the sandbox has been permanently terminated. */
+export function isSandboxTerminatedError(err: unknown): boolean {
+  if (
+    err != null &&
+    typeof err === 'object' &&
+    'code' in err &&
+    typeof (err as { code: unknown }).code === 'string'
+  ) {
+    const code = (err as { code: string }).code;
+    return (
+      code === 'SANDBOX_ALREADY_TERMINATED' || code === 'SANDBOX_NOT_FOUND'
+    );
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return (
+    message.includes('already been terminated') ||
+    message.includes('SANDBOX_ALREADY_TERMINATED') ||
+    message.includes('SANDBOX_NOT_FOUND')
+  );
+}
+
 // ============================================================================
 // Credential Injection
 // ============================================================================
@@ -828,7 +849,9 @@ export class CloudSandboxProvider implements SandboxProvider {
         'hermes.managed': 'true',
       });
 
-      const runningIds = new Set(runningSandboxes.map((s) => s.id));
+      const runningIds = new Set(
+        runningSandboxes.filter((s) => s.status === 'running').map((s) => s.id),
+      );
 
       // Update status for sessions that are no longer running
       for (const session of dbSessions) {
@@ -858,13 +881,20 @@ export class CloudSandboxProvider implements SandboxProvider {
         const runningSandboxes = await client.listSandboxes({
           'hermes.managed': 'true',
         });
-        const runningIds = new Set(runningSandboxes.map((s) => s.id));
+        const runningIds = new Set(
+          runningSandboxes
+            .filter((s) => s.status === 'running')
+            .map((s) => s.id),
+        );
         if (!runningIds.has(session.id)) {
           updateSessionStatus(db, session.id, 'exited');
           session.status = 'exited';
         }
       } catch (err) {
-        log.debug({ err }, 'Failed to sync cloud session status in get()');
+        log.debug(
+          { err, sessionId },
+          'Failed to sync cloud session status in get()',
+        );
       }
     }
 
@@ -974,38 +1004,129 @@ export class CloudSandboxProvider implements SandboxProvider {
     const token = await getDenoToken();
     if (!token) throw new Error('No Deno Deploy token available');
 
-    // Look up session metadata so we can restart the agent if the tmux
-    // session has died (e.g. user pressed ctrl+c in the agent).
     const db = openSessionDb();
     const session = dbGetSession(db, sessionId);
     const resumeCmd = session
       ? buildContinueCommand(session.agent, session.model)
       : undefined;
 
-    const sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
-    try {
-      // Reattach to the tmux session where the agent is running.
-      // If the tmux session is gone, a new one is created running the
-      // agent in continue mode so the user doesn't land in a bare shell.
-      await sshIntoSandbox(sandbox, {
-        tmux: true,
-        tmuxResumeCommand: resumeCmd,
-      });
-    } finally {
-      await sandbox.close();
+    // Try to connect with retries for transient errors
+    const MAX_ATTEMPTS = 3;
+    const RETRY_BASE_MS = 2_000;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const sandbox = await new DenoApiClient(token).connectSandbox(
+          sessionId,
+        );
+        try {
+          await sshIntoSandbox(sandbox, {
+            tmux: true,
+            tmuxResumeCommand: resumeCmd,
+          });
+          return; // Success — done
+        } finally {
+          await sandbox.close();
+        }
+      } catch (err) {
+        lastError = err;
+
+        // Sandbox is permanently gone — auto-resume with a new sandbox
+        if (isSandboxTerminatedError(err)) {
+          log.info(
+            { sessionId },
+            'Sandbox terminated — auto-resuming with new sandbox',
+          );
+          updateSessionStatus(db, sessionId, 'exited');
+
+          if (!session) {
+            throw new Error(
+              'Sandbox has been terminated and session metadata is missing — cannot auto-resume.',
+            );
+          }
+
+          console.log('Cloud sandbox has stopped. Starting a new one...');
+          const resumed = await this.resume(sessionId, {
+            mode: 'interactive',
+          });
+          // Attach to the freshly resumed sandbox
+          const newSandbox = await new DenoApiClient(token).connectSandbox(
+            resumed.id,
+          );
+          try {
+            const newResumeCmd = buildContinueCommand(
+              session.agent,
+              session.model,
+            );
+            await sshIntoSandbox(newSandbox, {
+              tmux: true,
+              tmuxResumeCommand: newResumeCmd,
+            });
+            return;
+          } finally {
+            await newSandbox.close();
+          }
+        }
+
+        // Transient error — retry with backoff
+        if (attempt < MAX_ATTEMPTS) {
+          const delay = RETRY_BASE_MS * attempt;
+          log.warn(
+            { err, attempt, maxAttempts: MAX_ATTEMPTS, sessionId },
+            'Failed to connect to sandbox for attach — retrying',
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
     }
+
+    // All retries exhausted
+    throw lastError;
   }
 
   async shell(sessionId: string): Promise<void> {
-    // Open a plain SSH shell (no tmux) for manual debugging
     const token = await getDenoToken();
     if (!token) throw new Error('No Deno Deploy token available');
-    const sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
-    try {
-      await sshIntoSandbox(sandbox);
-    } finally {
-      await sandbox.close();
+
+    const MAX_ATTEMPTS = 3;
+    const RETRY_BASE_MS = 2_000;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const sandbox = await new DenoApiClient(token).connectSandbox(
+          sessionId,
+        );
+        try {
+          await sshIntoSandbox(sandbox);
+          return;
+        } finally {
+          await sandbox.close();
+        }
+      } catch (err) {
+        lastError = err;
+
+        if (isSandboxTerminatedError(err)) {
+          const db = openSessionDb();
+          updateSessionStatus(db, sessionId, 'exited');
+          throw new Error(
+            'Sandbox has been terminated. Resume the session to start a new sandbox.',
+          );
+        }
+
+        if (attempt < MAX_ATTEMPTS) {
+          const delay = RETRY_BASE_MS * attempt;
+          log.warn(
+            { err, attempt, maxAttempts: MAX_ATTEMPTS, sessionId },
+            'Failed to connect to sandbox for shell — retrying',
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
     }
+
+    throw lastError;
   }
 
   // --------------------------------------------------------------------------
@@ -1057,6 +1178,10 @@ export class CloudSandboxProvider implements SandboxProvider {
           sandbox = await new DenoApiClient(token).connectSandbox(sessionId);
           break;
         } catch (err) {
+          // Sandbox is permanently gone — no point retrying
+          if (isSandboxTerminatedError(err)) {
+            throw new Error('Sandbox has been terminated.');
+          }
           log.warn(
             { err, attempt, maxAttempts: MAX_CONNECT_ATTEMPTS, sessionId },
             'Failed to connect to sandbox for log streaming',

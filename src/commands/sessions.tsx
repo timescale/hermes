@@ -1054,8 +1054,18 @@ export async function runSessionsTui({
       const actionProvider = result.session
         ? getProviderForSession(result.session)
         : provider;
-      await actionProvider.attach(result.sessionId);
-      // Return to the session detail view after detaching
+      try {
+        await actionProvider.attach(result.sessionId);
+      } catch (err) {
+        log.error(
+          { err, sessionId: result.sessionId },
+          'Failed to attach to session',
+        );
+        console.error(
+          `Failed to attach: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // Return to the session detail view after detaching (or on error)
       if (result.session) {
         nextView = 'detail';
         nextSession = result.session;
@@ -1068,8 +1078,15 @@ export async function runSessionsTui({
       const actionProvider = result.session
         ? getProviderForSession(result.session)
         : provider;
-      await actionProvider.shell(result.sessionId);
-      // Return to the session detail view after exiting the shell
+      try {
+        await actionProvider.shell(result.sessionId);
+      } catch (err) {
+        log.error({ err, sessionId: result.sessionId }, 'Failed to open shell');
+        console.error(
+          `Failed to open shell: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // Return to the session detail view after exiting the shell (or on error)
       if (result.session) {
         nextView = 'detail';
         nextSession = result.session;
@@ -1082,8 +1099,18 @@ export async function runSessionsTui({
       const actionProvider = getSandboxProvider(
         result.attachProvider ?? provider.type,
       );
-      await actionProvider.attach(result.sessionId);
-      // Return to the session detail view after detaching
+      try {
+        await actionProvider.attach(result.sessionId);
+      } catch (err) {
+        log.error(
+          { err, sessionId: result.sessionId },
+          'Failed to attach to new session',
+        );
+        console.error(
+          `Failed to attach: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // Return to the session detail view after detaching (or on error)
       if (result.session) {
         nextView = 'detail';
         nextSession = result.session;

@@ -9,7 +9,7 @@ import { formatCpuPercent, formatMemUsage } from '../services/docker';
 import { getPrForBranch, type PrInfo } from '../services/github';
 import { log } from '../services/logger';
 import {
-  getProviderForSession,
+  getSandboxProvider,
   type HermesSession,
   type SandboxProvider,
 } from '../services/sandbox';
@@ -69,12 +69,16 @@ export function SessionDetail({
 
   const isRunning = session.status === 'running';
   const isStopped = session.status === 'exited' || session.status === 'stopped';
-  const sessionProvider = getProviderForSession(session);
+  const providerType = session.provider;
+  const sessionProvider = useMemo(
+    () => getSandboxProvider(providerType),
+    [providerType],
+  );
 
-  // Poll CPU/memory stats for running containers
+  // Poll CPU/memory stats for running Docker containers only
   const statsIds = useMemo(
-    () => (isRunning ? [session.id] : []),
-    [isRunning, session.id],
+    () => (isRunning && providerType === 'docker' ? [session.id] : []),
+    [isRunning, providerType, session.id],
   );
   const getStats = useCallback(
     (ids: string[]) => fetchDockerStats(ids, [session]),
