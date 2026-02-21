@@ -54,6 +54,8 @@ export interface PromptScreenProps {
   onShell: (mountDir?: string, sandboxProvider?: SandboxProviderType) => void; // Launch bash shell
   onCancel: () => void;
   onViewSessions?: () => void;
+  /** Reset to a fresh new-prompt screen (clears resume state + all settings) */
+  onNewPrompt?: () => void;
 }
 
 interface ToastState {
@@ -100,6 +102,7 @@ export function PromptScreen({
   onSubmit,
   onShell,
   onViewSessions,
+  onNewPrompt,
 }: PromptScreenProps) {
   const { theme } = useTheme();
   const textareaRef = useRef<TextareaRenderable>(null);
@@ -118,7 +121,9 @@ export function PromptScreen({
   const [showSlashCommands, setShowSlashCommands] = useState(false);
   const [slashQuery, setSlashQuery] = useState('');
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [submitMode, setSubmitMode] = useState<SubmitMode>('async');
+  const [submitMode, setSubmitMode] = useState<SubmitMode>(
+    resumeSession?.interactive ? 'interactive' : 'async',
+  );
   // Mount mode state - enabled when initialMountDir is set, forced, or toggled via Ctrl+D
   // When forceMountMode is true, mount mode cannot be toggled off
   const [mountMode, setMountMode] = useState<boolean>(
@@ -243,14 +248,24 @@ export function PromptScreen({
       {
         id: 'provider.toggle',
         title: `Switch to ${sandboxProvider === 'docker' ? 'cloud' : 'Docker'} provider`,
-        description:
-          forceMountMode && sandboxProvider === 'docker'
+        description: resumeSession
+          ? 'Provider is locked when resuming a session'
+          : forceMountMode && sandboxProvider === 'docker'
             ? 'Cloud sandboxes require a git remote'
             : 'Toggle between Docker and Cloud sandbox providers',
         category: 'Prompt',
         keybind: { key: 'e', ctrl: true },
-        enabled: !(forceMountMode && sandboxProvider === 'docker'),
+        hidden: !!resumeSession,
+        enabled:
+          !resumeSession && !(forceMountMode && sandboxProvider === 'docker'),
         onSelect: () => {
+          if (resumeSession) {
+            setToast({
+              message: 'Provider cannot be changed when resuming a session.',
+              type: 'warning',
+            });
+            return;
+          }
           if (forceMountMode && sandboxProvider === 'docker') {
             setToast({
               message:
@@ -272,6 +287,15 @@ export function PromptScreen({
         },
       },
       {
+        id: 'task.new',
+        title: 'New task',
+        description: 'Reset to a fresh new prompt',
+        category: 'Navigation',
+        keybind: { key: 'n', ctrl: true },
+        enabled: !!onNewPrompt,
+        onSelect: () => onNewPrompt?.(),
+      },
+      {
         id: 'theme.select',
         title: 'Select theme',
         description: 'Change the color theme',
@@ -290,6 +314,7 @@ export function PromptScreen({
       sandboxProvider,
       onShell,
       onViewSessions,
+      onNewPrompt,
     ],
   );
 
@@ -386,14 +411,23 @@ export function PromptScreen({
       },
       {
         name: 'cloud',
-        description: forceMountMode
-          ? 'Cloud sandboxes require a git remote'
-          : 'Use cloud sandbox provider',
+        description: resumeSession
+          ? 'Provider is locked when resuming a session'
+          : forceMountMode
+            ? 'Cloud sandboxes require a git remote'
+            : 'Use cloud sandbox provider',
         onSelect: () => {
           setShowSlashCommands(false);
           setSlashQuery('');
           if (textareaRef.current) {
             textareaRef.current.clear();
+          }
+          if (resumeSession) {
+            setToast({
+              message: 'Provider cannot be changed when resuming a session.',
+              type: 'warning',
+            });
+            return;
           }
           if (forceMountMode) {
             setToast({
@@ -412,24 +446,42 @@ export function PromptScreen({
       },
       {
         name: 'docker',
-        description: 'Use Docker sandbox provider',
+        description: resumeSession
+          ? 'Provider is locked when resuming a session'
+          : 'Use Docker sandbox provider',
         onSelect: () => {
           setShowSlashCommands(false);
           setSlashQuery('');
           if (textareaRef.current) {
             textareaRef.current.clear();
           }
+          if (resumeSession) {
+            setToast({
+              message: 'Provider cannot be changed when resuming a session.',
+              type: 'warning',
+            });
+            return;
+          }
           setSandboxProvider('docker');
         },
       },
       {
         name: 'provider',
-        description: 'Toggle sandbox provider',
+        description: resumeSession
+          ? 'Provider is locked when resuming a session'
+          : 'Toggle sandbox provider',
         onSelect: () => {
           setShowSlashCommands(false);
           setSlashQuery('');
           if (textareaRef.current) {
             textareaRef.current.clear();
+          }
+          if (resumeSession) {
+            setToast({
+              message: 'Provider cannot be changed when resuming a session.',
+              type: 'warning',
+            });
+            return;
           }
           if (forceMountMode && sandboxProvider === 'docker') {
             setToast({
@@ -754,8 +806,16 @@ export function PromptScreen({
                 ? []
                 : [['shift+tab', 'agent'] as [string, string]]),
               ['ctrl+space', 'model'],
-              ['ctrl+e', sandboxProvider === 'docker' ? 'Docker' : 'Cloud'],
+              ...(resumeSession
+                ? []
+                : [
+                    [
+                      'ctrl+e',
+                      sandboxProvider === 'docker' ? 'Docker' : 'Cloud',
+                    ] as [string, string],
+                  ]),
               ['ctrl+l', 'sessions'],
+              ...(onNewPrompt ? [['ctrl+n', 'new'] as [string, string]] : []),
               ['ctrl+p', 'commands'],
             ]}
           />

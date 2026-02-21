@@ -199,6 +199,8 @@ function SessionsApp({
   const [view, setView] = useState<SessionsView>({ type: 'init' });
   const [config, setConfig] = useState<HermesConfig | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
+  // Counter to force PromptScreen remount (resets all state to defaults)
+  const [promptKey, setPromptKey] = useState(0);
 
   // Use refs to store props/config that we need in async functions
   // This avoids dependency issues with useCallback/useEffect
@@ -799,6 +801,7 @@ function SessionsApp({
     return (
       <>
         <PromptScreen
+          key={`${resumeSess?.id ?? 'new'}-${promptKey}`}
           defaultAgent={
             resumeSess?.agent ?? initialAgent ?? config?.agent ?? 'opencode'
           }
@@ -809,6 +812,10 @@ function SessionsApp({
           resumeSession={resumeSess}
           initialMountDir={resumeSess?.mountDir ?? initialMountDir}
           forceMountMode={!isGitRepo}
+          onNewPrompt={() => {
+            setPromptKey((k) => k + 1);
+            setView({ type: 'prompt' });
+          }}
           onSubmit={({
             prompt,
             agent,
