@@ -2,7 +2,19 @@ import { useBackgroundTaskStore } from '../stores/backgroundTaskStore';
 import { useTheme } from '../stores/themeStore';
 import { Dots } from './Dots';
 
-export function BackgroundTaskIndicator() {
+export interface BackgroundTaskIndicatorProps {
+  bottom?: number;
+  left?: number;
+  top?: number;
+  right?: number;
+}
+
+export function BackgroundTaskIndicator({
+  bottom = 1,
+  left = 2,
+  top,
+  right,
+}: BackgroundTaskIndicatorProps = {}) {
   const pendingCount = useBackgroundTaskStore((s) => s.pendingCount);
   const { theme } = useTheme();
 
@@ -13,8 +25,10 @@ export function BackgroundTaskIndicator() {
   return (
     <box
       position="absolute"
-      bottom={1}
-      left={2}
+      bottom={bottom}
+      left={left}
+      top={top}
+      right={right}
       backgroundColor={theme.backgroundPanel}
     >
       <text fg={theme.textMuted}>
