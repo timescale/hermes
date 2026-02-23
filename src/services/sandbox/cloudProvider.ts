@@ -7,7 +7,9 @@ import { runCloudSetupScreen } from '../../components/CloudSetup.tsx';
 import {
   enterSubprocessScreen,
   resetTerminal,
+  type SubprocessScreenOptions,
   shellEscape,
+  TUI_SUBPROCESS_OPTS,
 } from '../../utils.ts';
 import { buildAgentCommand, buildContinueCommand } from '../agentCommand.ts';
 import type { AgentType } from '../config.ts';
@@ -327,11 +329,17 @@ async function sshIntoSandbox(
      * one running this command.  Defaults to `bash -l`.
      */
     tmuxResumeCommand?: string;
+    /**
+     * Terminal screen options. Pass `TUI_SUBPROCESS_OPTS` when called
+     * from the TUI (alternate screen isolation). Omit or pass `{}` when
+     * called from standalone CLI commands like `hermes shell`.
+     */
+    screen?: SubprocessScreenOptions;
   },
 ): Promise<void> {
-  const { command, tmux, tmuxResumeCommand } = options ?? {};
+  const { command, tmux, tmuxResumeCommand, screen = {} } = options ?? {};
   const sshInfo = await sandbox.exposeSsh();
-  enterSubprocessScreen();
+  enterSubprocessScreen(screen);
   const sshArgs = [
     'ssh',
     '-o',
@@ -378,7 +386,7 @@ async function sshIntoSandbox(
       log.warn({ exitCode }, 'SSH process exited with non-zero status');
     }
   } finally {
-    resetTerminal();
+    resetTerminal(screen);
   }
 }
 
@@ -620,12 +628,16 @@ export class CloudSandboxProvider implements SandboxProvider {
   }
 
   async createShell(options: CreateShellSandboxOptions): Promise<void> {
+    const { onProgress } = options;
     const client = await this.getClient();
     const region = await this.resolveRegion();
+
+    onProgress?.('Preparing sandbox image');
     const baseSnapshot = await this.ensureImage();
 
     // Create an ephemeral root volume from the base snapshot so installed
     // tools are visible (snapshot-direct boot uses a read-only overlay).
+    onProgress?.('Creating volume');
     const shellVolume = await client.createVolume({
       slug: denoSlug('hsh'),
       region,
@@ -633,6 +645,7 @@ export class CloudSandboxProvider implements SandboxProvider {
       from: baseSnapshot,
     });
 
+    onProgress?.('Starting cloud sandbox');
     const sandbox = await client.createSandbox({
       region: region as 'ord' | 'ams',
       root: shellVolume.slug,
@@ -643,11 +656,13 @@ export class CloudSandboxProvider implements SandboxProvider {
 
     try {
       // Inject credentials
+      onProgress?.('Injecting credentials');
       await injectCredentials(sandbox);
       await sandboxExec(sandbox, 'mkdir -p /work');
 
       // Clone repo if available
       if (options.repoInfo && options.isGitRepo !== false) {
+        onProgress?.('Cloning repository');
         const fullName = options.repoInfo.fullName;
         await sandboxExec(
           sandbox,
@@ -656,20 +671,24 @@ export class CloudSandboxProvider implements SandboxProvider {
       }
 
       // SSH into the sandbox
+      onProgress?.('Connecting to sandbox');
       await sshIntoSandbox(sandbox);
     } finally {
       // Kill sandbox after shell exits
+      onProgress?.('Closing sandbox connection');
       try {
         await sandbox.close();
       } catch {
         // Best-effort cleanup
       }
+      onProgress?.('Stopping sandbox');
       try {
         await client.killSandbox(sandbox.resolvedId || sandbox.id);
       } catch {
         // Best-effort cleanup
       }
       // Clean up ephemeral volume
+      onProgress?.('Deleting ephemeral volume');
       try {
         await client.deleteVolume(shellVolume.id);
       } catch {
@@ -1024,6 +1043,7 @@ export class CloudSandboxProvider implements SandboxProvider {
           await sshIntoSandbox(sandbox, {
             tmux: true,
             tmuxResumeCommand: resumeCmd,
+            screen: TUI_SUBPROCESS_OPTS,
           });
           return; // Success — done
         } finally {
@@ -1062,6 +1082,7 @@ export class CloudSandboxProvider implements SandboxProvider {
             await sshIntoSandbox(newSandbox, {
               tmux: true,
               tmuxResumeCommand: newResumeCmd,
+              screen: TUI_SUBPROCESS_OPTS,
             });
             return;
           } finally {
@@ -1099,7 +1120,9 @@ export class CloudSandboxProvider implements SandboxProvider {
           sessionId,
         );
         try {
-          await sshIntoSandbox(sandbox);
+          await sshIntoSandbox(sandbox, {
+            screen: TUI_SUBPROCESS_OPTS,
+          });
           return;
         } finally {
           await sandbox.close();

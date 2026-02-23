@@ -63,6 +63,7 @@ import {
   ensureGitignore,
   enterSubprocessScreen,
   resetTerminal,
+  TUI_SUBPROCESS_OPTS,
 } from '../utils';
 
 // ============================================================================
@@ -1141,7 +1142,7 @@ export async function runSessionsTui({
 
     // Handle shell action - start bash shell in container
     if (result.type === 'shell') {
-      enterSubprocessScreen();
+      enterSubprocessScreen(TUI_SUBPROCESS_OPTS);
       try {
         if (result.resumeSessionId) {
           // Shell on resumed container
@@ -1170,7 +1171,7 @@ export async function runSessionsTui({
         log.error({ err }, 'Failed to start shell');
         console.error(`Failed to start shell: ${err}`);
       }
-      resetTerminal();
+      resetTerminal(TUI_SUBPROCESS_OPTS);
       continue;
     }
 

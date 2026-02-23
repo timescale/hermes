@@ -59,6 +59,7 @@ export interface CreateShellSandboxOptions {
   repoInfo: RepoInfo | null;
   mountDir?: string;
   isGitRepo?: boolean;
+  onProgress?: (step: string) => void;
 }
 
 // Options for resuming a stopped session

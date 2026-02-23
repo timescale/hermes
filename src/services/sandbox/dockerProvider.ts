@@ -162,6 +162,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   async createShell(options: CreateShellSandboxOptions): Promise<void> {
+    options.onProgress?.('Starting shell container');
     await startShellContainer({
       repoInfo: options.repoInfo,
       mountDir: options.mountDir,

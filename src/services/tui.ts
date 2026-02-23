@@ -4,7 +4,7 @@ import type { Root } from '@opentui/react';
 import { createRoot } from '@opentui/react';
 import type { ReactNode } from 'react';
 import { useTheme } from '../stores/themeStore';
-import { restoreConsole } from '../utils';
+import { ensureSaneTerminal, restoreConsole } from '../utils';
 import { supportsTrueColor } from './theme';
 
 interface TuiResult {
@@ -54,6 +54,12 @@ export const createTui = async (): Promise<TuiResult> => {
     await renderer.idle();
     renderer.destroy();
     restoreConsole();
+    // The renderer puts the terminal into raw mode which disables onlcr
+    // (NL→CR-NL translation) among other settings.  renderer.destroy()
+    // doesn't always fully restore the line discipline, so we
+    // explicitly reset it to avoid staircased output in subsequent
+    // subprocess or shell sessions.
+    ensureSaneTerminal();
   };
 
   return { root, destroy, render, renderer };

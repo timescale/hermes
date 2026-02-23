@@ -22,6 +22,7 @@ import {
   formatShellError,
   resetTerminal,
   type ShellError,
+  TUI_SUBPROCESS_OPTS,
 } from '../utils';
 import { buildAgentCommand } from './agentCommand';
 import { getClaudeConfigFiles } from './claude';
@@ -1042,7 +1043,7 @@ export function streamContainerLogs(nameOrId: string): LogStream {
 export async function attachToContainer(nameOrId: string): Promise<void> {
   // Enter alternate screen so all container output is isolated from the
   // user's main screen buffer / scrollback history.
-  enterSubprocessScreen();
+  enterSubprocessScreen(TUI_SUBPROCESS_OPTS);
 
   const proc = Bun.spawn(
     ['docker', 'attach', '--detach-keys=ctrl-\\', nameOrId],
@@ -1058,7 +1059,7 @@ export async function attachToContainer(nameOrId: string): Promise<void> {
   await proc.exited;
 
   // Exit alternate screen and clean up terminal state after detaching.
-  resetTerminal();
+  resetTerminal(TUI_SUBPROCESS_OPTS);
 }
 
 export async function signalContainerTTYResize(
@@ -1085,7 +1086,7 @@ export async function signalContainerTTYResize(
 export async function shellInContainer(nameOrId: string): Promise<void> {
   // Enter alternate screen so all shell output is isolated from the
   // user's main screen buffer / scrollback history.
-  enterSubprocessScreen();
+  enterSubprocessScreen(TUI_SUBPROCESS_OPTS);
 
   const proc = Bun.spawn(['docker', 'exec', '-it', nameOrId, '/bin/bash'], {
     stdio: ['inherit', 'inherit', 'inherit'],
@@ -1093,7 +1094,7 @@ export async function shellInContainer(nameOrId: string): Promise<void> {
   await proc.exited;
 
   // Exit alternate screen and clean up terminal state after the shell exits.
-  resetTerminal();
+  resetTerminal(TUI_SUBPROCESS_OPTS);
 }
 
 // ============================================================================

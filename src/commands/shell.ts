@@ -3,10 +3,15 @@ import { tryGetRepoInfo } from '../services/git';
 import { log } from '../services/logger';
 import type { SandboxProviderType } from '../services/sandbox';
 import { getDefaultProvider, getSandboxProvider } from '../services/sandbox';
+import { ensureSaneTerminal } from '../utils';
 
 interface ShellOptions {
   mount?: string | true;
   provider?: SandboxProviderType;
+}
+
+function logProgress(step: string): void {
+  process.stderr.write(`  ${step}...\r\n`);
 }
 
 export const shellCommand = new Command('shell')
@@ -23,13 +28,21 @@ export const shellCommand = new Command('shell')
   )
   .action(async (options: ShellOptions) => {
     try {
+      // Recover terminal line discipline in case a previous hermes
+      // session left it in raw mode (e.g. onlcr disabled).
+      ensureSaneTerminal();
+
       const provider = options.provider
         ? getSandboxProvider(options.provider)
         : await getDefaultProvider();
 
+      logProgress('Checking sandbox runtime');
       await provider.ensureReady();
+
+      logProgress('Ensuring sandbox image');
       await provider.ensureImage();
 
+      logProgress('Getting repository info');
       const repoInfo = await tryGetRepoInfo();
       const mountDir =
         options.mount === true
@@ -42,6 +55,7 @@ export const shellCommand = new Command('shell')
         repoInfo,
         mountDir,
         isGitRepo: repoInfo !== null,
+        onProgress: logProgress,
       });
     } catch (err) {
       log.error({ err }, 'Error starting shell');
