@@ -83,6 +83,17 @@ describe('backgroundTaskStore', () => {
     expect(useBackgroundTaskStore.getState().tasks).toHaveLength(0);
   });
 
+  test('waitForAll resolves when tasks already completed', async () => {
+    const { enqueue } = useBackgroundTaskStore.getState();
+    enqueue('fast task', async () => {});
+    // Wait for the microtask to complete the task
+    await new Promise((r) => setTimeout(r, 10));
+    expect(useBackgroundTaskStore.getState().pendingCount).toBe(0);
+    // waitForAll should resolve immediately even though task already finished
+    await useBackgroundTaskStore.getState().waitForAll();
+    expect(useBackgroundTaskStore.getState().pendingCount).toBe(0);
+  });
+
   test('shuttingDown flag', () => {
     const { setShuttingDown } = useBackgroundTaskStore.getState();
     expect(useBackgroundTaskStore.getState().shuttingDown).toBe(false);

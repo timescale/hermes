@@ -9,7 +9,7 @@ export function ShutdownOverlay() {
   const pendingCount = useBackgroundTaskStore((s) => s.pendingCount);
   const { theme } = useTheme();
 
-  if (!shuttingDown) return null;
+  if (!shuttingDown || pendingCount === 0) return null;
 
   const activeTasks = tasks.filter(
     (t) => t.status === 'running' || t.status === 'pending',

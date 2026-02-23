@@ -91,6 +91,12 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
             resolve();
           }
         });
+        // Re-check after subscribing to close the race window where
+        // a task completes between the initial check and the subscription
+        if (get().pendingCount === 0) {
+          unsub();
+          resolve();
+        }
       });
     },
 
@@ -99,11 +105,15 @@ export const useBackgroundTaskStore = create<BackgroundTaskState>()(
     },
 
     clear: () => {
-      set((state) => ({
-        tasks: state.tasks.filter(
+      set((state) => {
+        const remaining = state.tasks.filter(
           (t) => t.status === 'running' || t.status === 'pending',
-        ),
-      }));
+        );
+        return {
+          tasks: remaining,
+          pendingCount: remaining.length,
+        };
+      });
     },
   }),
 );
