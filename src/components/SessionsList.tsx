@@ -22,11 +22,11 @@ import {
 } from '../services/sessionDisplay';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
+import { useToastStore } from '../stores/toastStore';
 import { formatShellError, type ShellError } from '../utils';
 import { ConfirmModal } from './ConfirmModal';
 import { Frame } from './Frame';
 import { HotkeysBar } from './HotkeysBar';
-import { Toast, type ToastType } from './Toast';
 
 /** Cache TTL in milliseconds (60 seconds) */
 const PR_CACHE_TTL = 60_000;
@@ -44,12 +44,6 @@ export interface SessionsListProps {
   onResume?: (session: HermesSession) => void;
   /** Current repo fullName (e.g., "owner/repo") if in a git repo, undefined otherwise */
   currentRepo?: string;
-}
-
-interface ToastState {
-  message: string;
-  type: ToastType;
-  duration?: number;
 }
 
 const FILTER_LABELS: Record<FilterMode, string> = {
@@ -92,7 +86,6 @@ export function SessionsList({
   const [scopeMode, setScopeMode] = useState<ScopeMode>(
     currentRepo ? 'local' : 'global',
   );
-  const [toast, setToast] = useState<ToastState | null>(null);
   const [deleteModal, setDeleteModal] = useState<HermesSession | null>(null);
   const [stopModal, setStopModal] = useState<HermesSession | null>(null);
   const [actionInProgress, setActionInProgress] = useState(false);
@@ -179,7 +172,7 @@ export function SessionsList({
       setLoading(false);
     } catch (err) {
       log.error({ err }, 'Failed to load sessions');
-      setToast({ message: `Failed to load sessions: ${err}`, type: 'error' });
+      useToastStore.getState().show(`Failed to load sessions: ${err}`, 'error');
       setLoading(false);
     }
   }, []);
@@ -216,13 +209,13 @@ export function SessionsList({
     setActionInProgress(true);
     try {
       await getProviderForSession(session).remove(session.id);
-      setToast({ message: 'Session deleted', type: 'success' });
+      useToastStore.getState().show('Session deleted', 'success');
       // Update selection before refreshing so it persists
       setSelectedSessionId(nextSessionId);
       await loadSessions();
     } catch (err) {
       log.error({ err }, `Failed to remove container ${session.id}`);
-      setToast({ message: `Failed to delete: ${err}`, type: 'error' });
+      useToastStore.getState().show(`Failed to delete: ${err}`, 'error');
     } finally {
       setActionInProgress(false);
     }
@@ -233,14 +226,14 @@ export function SessionsList({
     const session = stopModal;
     setStopModal(null);
     setActionInProgress(true);
-    setToast({ message: 'Stopping container...', type: 'info' });
+    useToastStore.getState().show('Stopping container...', 'info');
     try {
       await getProviderForSession(session).stop(session.id);
-      setToast({ message: 'Container stopped', type: 'success' });
+      useToastStore.getState().show('Container stopped', 'success');
       await loadSessions();
     } catch (err) {
       log.error({ err }, `Failed to stop container ${session.id}`);
-      setToast({ message: `Failed to stop: ${err}`, type: 'error' });
+      useToastStore.getState().show(`Failed to stop: ${err}`, 'error');
     } finally {
       setActionInProgress(false);
     }
@@ -253,14 +246,13 @@ export function SessionsList({
     setActionInProgress(true);
     try {
       await Bun.$`git fetch && git switch ${branchName}`.quiet();
-      setToast({
-        message: `Switched to branch ${branchName}`,
-        type: 'success',
-      });
+      useToastStore
+        .getState()
+        .show(`Switched to branch ${branchName}`, 'success');
     } catch (err) {
       const formattedError = formatShellError(err as ShellError);
       log.error({ err }, `Failed to switch to branch ${branchName}`);
-      setToast({ message: formattedError.message, type: 'error' });
+      useToastStore.getState().show(formattedError.message, 'error');
     } finally {
       setActionInProgress(false);
     }
@@ -398,7 +390,7 @@ export function SessionsList({
           setLoading(true);
           clearPrCache();
           loadSessions().then(() => {
-            setToast({ message: 'Refreshed', type: 'info' });
+            useToastStore.getState().show('Refreshed', 'info');
           });
         },
       },
@@ -485,24 +477,20 @@ export function SessionsList({
             if (prInfo) {
               open(prInfo.url)
                 .then(() => {
-                  setToast({
-                    message: `Opening PR #${prInfo.number}...`,
-                    type: 'info',
-                    duration: 1000,
-                  });
+                  useToastStore
+                    .getState()
+                    .show(`Opening PR #${prInfo.number}...`, 'info', 1000);
                 })
                 .catch((err: unknown) => {
                   log.debug({ err }, 'Failed to open PR URL in browser');
-                  setToast({
-                    message: 'Failed to open PR in browser',
-                    type: 'error',
-                  });
+                  useToastStore
+                    .getState()
+                    .show('Failed to open PR in browser', 'error');
                 });
             } else {
-              setToast({
-                message: 'No PR found for this session',
-                type: 'warning',
-              });
+              useToastStore
+                .getState()
+                .show('No PR found for this session', 'warning');
             }
           }
         },
@@ -835,16 +823,6 @@ export function SessionsList({
           confirmColor={theme.warning}
           onConfirm={handleStop}
           onCancel={() => setStopModal(null)}
-        />
-      )}
-
-      {/* Toast notifications */}
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          duration={toast.duration}
-          onDismiss={() => setToast(null)}
         />
       )}
     </Frame>
