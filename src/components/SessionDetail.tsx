@@ -55,7 +55,8 @@ export function SessionDetail({
   onNewPrompt,
 }: SessionDetailProps) {
   const { theme } = useTheme();
-  const { prCache, setPrInfo } = useSessionStore();
+  const { prCache, setPrInfo, addPendingDelete, removePendingDelete } =
+    useSessionStore();
   const [session, setSession] = useState(initialSession);
   const [modal, setModal] = useState<ModalType>(null);
   const [actionInProgress, setActionInProgress] = useState(false);
@@ -148,18 +149,32 @@ export function SessionDetail({
   const handleDelete = useCallback(() => {
     setModal(null);
 
+    // Mark as pending delete (Layer 1: immediate in-memory hide)
+    addPendingDelete(session.id);
+
     useToastStore.getState().show('Session deleted', 'success');
 
     // Enqueue background deletion
     useBackgroundTaskStore
       .getState()
       .enqueue(`Deleting "${session.name}"`, async () => {
-        await sessionProvider.remove(session.id);
+        try {
+          await sessionProvider.remove(session.id);
+        } finally {
+          removePendingDelete(session.id);
+        }
       });
 
     // Navigate back to list immediately
     onSessionDeleted();
-  }, [session.id, session.name, sessionProvider, onSessionDeleted]);
+  }, [
+    session.id,
+    session.name,
+    sessionProvider,
+    onSessionDeleted,
+    addPendingDelete,
+    removePendingDelete,
+  ]);
 
   const handleResume = useCallback(() => {
     onResume(session);
