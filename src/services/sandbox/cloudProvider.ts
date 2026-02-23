@@ -37,6 +37,7 @@ import type {
   ResumeSandboxOptions,
   SandboxBuildProgress,
   SandboxProvider,
+  ShellSession,
 } from './types.ts';
 
 // ============================================================================
@@ -627,7 +628,7 @@ export class CloudSandboxProvider implements SandboxProvider {
     return session;
   }
 
-  async createShell(options: CreateShellSandboxOptions): Promise<void> {
+  async createShell(options: CreateShellSandboxOptions): Promise<ShellSession> {
     const { onProgress } = options;
     const client = await this.getClient();
     const region = await this.resolveRegion();
@@ -654,47 +655,44 @@ export class CloudSandboxProvider implements SandboxProvider {
       labels: { 'hermes.managed': 'true' },
     });
 
-    try {
-      // Inject credentials
-      onProgress?.('Injecting credentials');
-      await injectCredentials(sandbox);
-      await sandboxExec(sandbox, 'mkdir -p /work');
+    // Inject credentials
+    onProgress?.('Injecting credentials');
+    await injectCredentials(sandbox);
+    await sandboxExec(sandbox, 'mkdir -p /work');
 
-      // Clone repo if available
-      if (options.repoInfo && options.isGitRepo !== false) {
-        onProgress?.('Cloning repository');
-        const fullName = options.repoInfo.fullName;
-        await sandboxExec(
-          sandbox,
-          `cd /work && gh auth setup-git && gh repo clone ${shellEscape(fullName)} app`,
-        );
-      }
-
-      // SSH into the sandbox
-      onProgress?.('Connecting to sandbox');
-      await sshIntoSandbox(sandbox);
-    } finally {
-      // Kill sandbox after shell exits
-      onProgress?.('Closing sandbox connection');
-      try {
-        await sandbox.close();
-      } catch {
-        // Best-effort cleanup
-      }
-      onProgress?.('Stopping sandbox');
-      try {
-        await client.killSandbox(sandbox.resolvedId || sandbox.id);
-      } catch {
-        // Best-effort cleanup
-      }
-      // Clean up ephemeral volume
-      onProgress?.('Deleting ephemeral volume');
-      try {
-        await client.deleteVolume(shellVolume.id);
-      } catch {
-        // Best-effort cleanup
-      }
+    // Clone repo if available
+    if (options.repoInfo && options.isGitRepo !== false) {
+      onProgress?.('Cloning repository');
+      const fullName = options.repoInfo.fullName;
+      await sandboxExec(
+        sandbox,
+        `cd /work && gh auth setup-git && gh repo clone ${shellEscape(fullName)} app`,
+      );
     }
+
+    return {
+      connect: async () => {
+        onProgress?.('Connecting to sandbox');
+        await sshIntoSandbox(sandbox);
+      },
+      cleanup: async () => {
+        try {
+          await sandbox.close();
+        } catch {
+          // Best-effort cleanup
+        }
+        try {
+          await client.killSandbox(sandbox.resolvedId || sandbox.id);
+        } catch {
+          // Best-effort cleanup
+        }
+        try {
+          await client.deleteVolume(shellVolume.id);
+        } catch {
+          // Best-effort cleanup
+        }
+      },
+    };
   }
 
   async resume(

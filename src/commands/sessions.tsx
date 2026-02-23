@@ -49,6 +49,7 @@ import {
   listAllSessions,
   type SandboxProvider,
   type SandboxProviderType,
+  type ShellSession,
 } from '../services/sandbox';
 import { formatRelativeTime } from '../services/sessionDisplay';
 import { createTui } from '../services/tui.ts';
@@ -108,6 +109,7 @@ type SessionsView =
       step: string;
       mode: SubmitMode;
     }
+  | { type: 'starting-shell'; step: string }
   | { type: 'detail'; session: HermesSession }
   | { type: 'list' };
 
@@ -118,6 +120,7 @@ interface SessionsResult {
     | 'attach-session'
     | 'exec-shell'
     | 'shell'
+    | 'connect-shell'
     | 'needs-agent-auth';
   sessionId?: string;
   // For attach/exec-shell: the session to return to after detaching
@@ -134,6 +137,8 @@ interface SessionsResult {
   shellIsGitRepo?: boolean;
   // For shell: provider to use
   shellProvider?: SandboxProviderType;
+  // For connect-shell: prepared shell session ready to connect
+  shellSession?: ShellSession;
   // For needs-agent-auth: info needed to retry after login
   authInfo?: {
     agent: AgentType;
@@ -624,6 +629,68 @@ function SessionsApp({
     [onComplete, provider],
   );
 
+  // Start shell session - prepare the shell sandbox and hand off to connect
+  const startShellSession = useCallback(
+    async (
+      shellMountDir?: string,
+      shellIsGitRepo?: boolean,
+      selectedProvider?: SandboxProviderType,
+    ) => {
+      try {
+        const activeProvider = selectedProvider
+          ? getSandboxProvider(selectedProvider)
+          : provider;
+
+        setView({
+          type: 'starting-shell',
+          step: 'Preparing sandbox environment',
+        });
+
+        await activeProvider.ensureImage({
+          onProgress: (progress) => {
+            if (
+              progress.type === 'pulling-cache' ||
+              progress.type === 'building'
+            ) {
+              setView((v) =>
+                v.type === 'starting-shell'
+                  ? { ...v, step: progress.message }
+                  : v,
+              );
+            }
+          },
+        });
+
+        const shellRepoInfo = shellIsGitRepo ? await tryGetRepoInfo() : null;
+
+        const shell = await activeProvider.createShell({
+          repoInfo: shellRepoInfo,
+          mountDir: shellMountDir,
+          isGitRepo: shellIsGitRepo,
+          onProgress: (step) => {
+            setView((v) => (v.type === 'starting-shell' ? { ...v, step } : v));
+          },
+        });
+
+        // Shell is prepared — exit TUI so the outer loop can connect
+        onComplete({
+          type: 'connect-shell',
+          shellSession: shell,
+        });
+      } catch (err) {
+        log.error({ err }, 'Failed to start shell');
+        useToastStore
+          .getState()
+          .show(
+            `Failed to start shell: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          );
+        setView({ type: 'prompt' });
+      }
+    },
+    [onComplete, provider],
+  );
+
   // Handle docker setup completion
   const handleDockerComplete = useCallback(
     async (result: DockerSetupResult) => {
@@ -872,20 +939,19 @@ function SessionsApp({
           }}
           onShell={(shellMountDir, selectedProvider) => {
             if (resumeSess) {
-              // Shell on resumed container
+              // Shell on resumed container — still needs outer loop for resume + shell
               onComplete({
                 type: 'shell',
                 resumeSessionId: resumeSess.id,
                 resumeProvider: resumeSess.provider,
               });
             } else {
-              // Fresh shell container
-              onComplete({
-                type: 'shell',
+              // Fresh shell container — prepare in TUI with loading screen
+              startShellSession(
                 shellMountDir,
-                shellIsGitRepo: propsRef.current.isGitRepo,
-                shellProvider: selectedProvider,
-              });
+                propsRef.current.isGitRepo,
+                selectedProvider,
+              );
             }
           }}
           onCancel={() => onComplete({ type: 'quit' })}
@@ -907,6 +973,18 @@ function SessionsApp({
     return (
       <>
         <StartingScreen step={view.step} hint={hint} />
+        <GlobalToast />
+        <BackgroundTaskIndicator />
+        <ShutdownOverlay />
+      </>
+    );
+  }
+
+  // ---- Starting Shell Screen View ----
+  if (view.type === 'starting-shell') {
+    return (
+      <>
+        <StartingScreen step={view.step} />
         <GlobalToast />
         <BackgroundTaskIndicator />
         <ShutdownOverlay />
@@ -1140,38 +1218,40 @@ export async function runSessionsTui({
       continue;
     }
 
-    // Handle shell action - start bash shell in container
-    if (result.type === 'shell') {
+    // Handle shell action - resume a stopped container and open a shell in it
+    if (result.type === 'shell' && result.resumeSessionId) {
       enterSubprocessScreen(TUI_SUBPROCESS_OPTS);
       try {
-        if (result.resumeSessionId) {
-          // Shell on resumed container
-          const actionProvider = getSandboxProvider(
-            result.resumeProvider ?? provider.type,
-          );
-          const resumed = await actionProvider.resume(result.resumeSessionId, {
-            mode: 'shell',
-          });
-          await actionProvider.shell(resumed.id);
-        } else {
-          // Fresh shell container
-          const actionProvider = getSandboxProvider(
-            result.shellProvider ?? provider.type,
-          );
-          const shellRepoInfo = result.shellIsGitRepo
-            ? await getRepoInfo()
-            : null;
-          await actionProvider.createShell({
-            repoInfo: shellRepoInfo,
-            mountDir: result.shellMountDir,
-            isGitRepo: result.shellIsGitRepo,
-          });
-        }
+        const actionProvider = getSandboxProvider(
+          result.resumeProvider ?? provider.type,
+        );
+        const resumed = await actionProvider.resume(result.resumeSessionId, {
+          mode: 'shell',
+        });
+        await actionProvider.shell(resumed.id);
       } catch (err) {
         log.error({ err }, 'Failed to start shell');
         console.error(`Failed to start shell: ${err}`);
       }
       resetTerminal(TUI_SUBPROCESS_OPTS);
+      continue;
+    }
+
+    // Handle connect-shell action - shell was prepared in the TUI, now connect
+    if (result.type === 'connect-shell' && result.shellSession) {
+      enterSubprocessScreen(TUI_SUBPROCESS_OPTS);
+      try {
+        await result.shellSession.connect();
+      } catch (err) {
+        log.error({ err }, 'Failed to connect to shell');
+        console.error(`Failed to connect to shell: ${err}`);
+      }
+      resetTerminal(TUI_SUBPROCESS_OPTS);
+      // Enqueue cleanup as a background task so the TUI returns immediately
+      const { cleanup } = result.shellSession;
+      useBackgroundTaskStore
+        .getState()
+        .enqueue('Cleaning up shell sandbox', cleanup);
       continue;
     }
 

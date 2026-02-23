@@ -51,12 +51,19 @@ export const shellCommand = new Command('shell')
             ? options.mount
             : undefined;
 
-      await provider.createShell({
+      const shell = await provider.createShell({
         repoInfo,
         mountDir,
         isGitRepo: repoInfo !== null,
         onProgress: logProgress,
       });
+
+      try {
+        await shell.connect();
+      } finally {
+        logProgress('Cleaning up');
+        await shell.cleanup();
+      }
     } catch (err) {
       log.error({ err }, 'Error starting shell');
       process.exit(1);

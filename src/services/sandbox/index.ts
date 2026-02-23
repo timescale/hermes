@@ -15,6 +15,7 @@ export type {
   SandboxProvider,
   SandboxProviderType,
   SandboxStats,
+  ShellSession,
 } from './types.ts';
 
 import { readConfig } from '../config.ts';

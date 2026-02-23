@@ -62,6 +62,17 @@ export interface CreateShellSandboxOptions {
   onProgress?: (step: string) => void;
 }
 
+// Handle returned by createShell for split connect/cleanup lifecycle
+export interface ShellSession {
+  /** Connect to the shell (SSH/docker attach). Blocks until the user exits. */
+  connect: () => Promise<void>;
+  /**
+   * Clean up resources (kill sandbox, delete volume, etc.).
+   * Safe to call multiple times. Errors are swallowed (best-effort).
+   */
+  cleanup: () => Promise<void>;
+}
+
 // Options for resuming a stopped session
 export interface ResumeSandboxOptions {
   mode: 'interactive' | 'detached' | 'shell';
@@ -110,7 +121,7 @@ export interface SandboxProvider {
   // Lifecycle — create/resume always return a session (never attach internally).
   // For interactive sessions, the caller should call attach() after create/resume.
   create(options: CreateSandboxOptions): Promise<HermesSession>;
-  createShell(options: CreateShellSandboxOptions): Promise<void>;
+  createShell(options: CreateShellSandboxOptions): Promise<ShellSession>;
   resume(
     sessionId: string,
     options: ResumeSandboxOptions,

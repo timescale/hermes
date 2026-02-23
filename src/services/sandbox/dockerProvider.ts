@@ -29,6 +29,7 @@ import type {
   SandboxBuildProgress,
   SandboxProvider,
   SandboxStats,
+  ShellSession,
 } from './types.ts';
 
 // ============================================================================
@@ -161,13 +162,18 @@ export class DockerSandboxProvider implements SandboxProvider {
     return mapDockerSession(session);
   }
 
-  async createShell(options: CreateShellSandboxOptions): Promise<void> {
+  async createShell(options: CreateShellSandboxOptions): Promise<ShellSession> {
     options.onProgress?.('Starting shell container');
-    await startShellContainer({
-      repoInfo: options.repoInfo,
-      mountDir: options.mountDir,
-      isGitRepo: options.isGitRepo,
-    });
+    return {
+      connect: () =>
+        startShellContainer({
+          repoInfo: options.repoInfo,
+          mountDir: options.mountDir,
+          isGitRepo: options.isGitRepo,
+        }),
+      // Docker uses --rm so containers auto-remove on exit
+      cleanup: async () => {},
+    };
   }
 
   async resume(
