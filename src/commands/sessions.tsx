@@ -19,7 +19,6 @@ import { SessionDetail } from '../components/SessionDetail';
 import { SessionsList } from '../components/SessionsList';
 import { ShutdownOverlay } from '../components/ShutdownOverlay';
 import { StartingScreen } from '../components/StartingScreen';
-import { Toast, type ToastType } from '../components/Toast';
 import { checkClaudeCredentials, ensureClaudeAuth } from '../services/claude';
 import { CommandPaletteHost } from '../services/commands.tsx';
 import {
@@ -59,6 +58,7 @@ import {
   performUpdate,
 } from '../services/updater';
 import { useBackgroundTaskStore } from '../stores/backgroundTaskStore';
+import { useToastStore } from '../stores/toastStore';
 import {
   ensureGitignore,
   enterSubprocessScreen,
@@ -143,11 +143,6 @@ interface SessionsResult {
   };
 }
 
-interface ToastState {
-  message: string;
-  type: ToastType;
-}
-
 export interface RunSessionsTuiOptions {
   initialView?: 'prompt' | 'list' | 'starting' | 'detail';
   initialPrompt?: string;
@@ -205,7 +200,6 @@ function SessionsApp({
 }: SessionsAppProps) {
   const [view, setView] = useState<SessionsView>({ type: 'init' });
   const [config, setConfig] = useState<HermesConfig | null>(null);
-  const [toast, setToast] = useState<ToastState | null>(null);
   // Counter to force PromptScreen remount (resets all state to defaults)
   const [promptKey, setPromptKey] = useState(0);
 
@@ -268,10 +262,6 @@ function SessionsApp({
     }
   }, [shuttingDown, pendingCount, onComplete]);
 
-  const showToast = useCallback((message: string, type: ToastType) => {
-    setToast({ message, type });
-  }, []);
-
   // Background auto-update check (fire-and-forget on mount)
   useEffect(() => {
     if (!isCompiledBinary()) return;
@@ -283,12 +273,14 @@ function SessionsApp({
         const update = await checkForUpdate();
         if (cancelled || !update) return;
 
-        showToast(`Updating to v${update.latestVersion}...`, 'info');
+        useToastStore
+          .getState()
+          .show(`Updating to v${update.latestVersion}...`, 'info');
 
         await performUpdate(update, (progress) => {
           if (cancelled) return;
           if (progress.phase === 'complete') {
-            showToast(progress.message, 'success');
+            useToastStore.getState().show(progress.message, 'success');
           }
         });
       } catch (err) {
@@ -299,7 +291,7 @@ function SessionsApp({
     return () => {
       cancelled = true;
     };
-  }, [showToast]);
+  }, []);
 
   // Start session function - handles the full flow of starting an agent
   const startSession = useCallback(
@@ -394,10 +386,12 @@ function SessionsApp({
 
         // Cloud sandboxes require a git repo (no mount mode support)
         if (activeProvider.type === 'cloud' && !inGitRepo) {
-          showToast(
-            'Cloud sandboxes require a git remote. Use Docker for non-git directories.',
-            'error',
-          );
+          useToastStore
+            .getState()
+            .show(
+              'Cloud sandboxes require a git remote. Use Docker for non-git directories.',
+              'error',
+            );
           setView({ type: 'prompt' });
           return;
         }
@@ -516,14 +510,16 @@ function SessionsApp({
         }
       } catch (err) {
         log.error({ err }, 'Failed to start session');
-        showToast(
-          `Failed to start: ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        );
+        useToastStore
+          .getState()
+          .show(
+            `Failed to start: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          );
         setView({ type: 'prompt' });
       }
     },
-    [showToast, onComplete, provider],
+    [onComplete, provider],
   );
 
   // Resume session function - handles the full flow of resuming an agent
@@ -615,14 +611,16 @@ function SessionsApp({
         }
       } catch (err) {
         log.error({ err }, 'Failed to resume session');
-        showToast(
-          `Failed to resume: ${err instanceof Error ? err.message : String(err)}`,
-          'error',
-        );
+        useToastStore
+          .getState()
+          .show(
+            `Failed to resume: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          );
         setView({ type: 'prompt', resumeSession: session });
       }
     },
-    [showToast, onComplete, provider],
+    [onComplete, provider],
   );
 
   // Handle docker setup completion
@@ -633,7 +631,9 @@ function SessionsApp({
         return;
       }
       if (result.type === 'error') {
-        showToast(result.error ?? 'Docker setup failed', 'error');
+        useToastStore
+          .getState()
+          .show(result.error ?? 'Docker setup failed', 'error');
         onComplete({ type: 'quit' });
         return;
       }
@@ -670,7 +670,7 @@ function SessionsApp({
         setView({ type: 'list' });
       }
     },
-    [onComplete, showToast, startSession],
+    [onComplete, startSession],
   );
 
   useEffect(() => {
@@ -687,7 +687,7 @@ function SessionsApp({
         return;
       }
       if (result.type === 'error') {
-        showToast(result.message, 'error');
+        useToastStore.getState().show(result.message, 'error');
         onComplete({ type: 'quit' });
         return;
       }
@@ -720,7 +720,7 @@ function SessionsApp({
         setView({ type: 'list' });
       }
     },
-    [onComplete, showToast, startSession],
+    [onComplete, startSession],
   );
 
   // Handle resume from session detail - navigate to PromptScreen with resume context
@@ -736,7 +736,9 @@ function SessionsApp({
         return;
       }
       if (result.type === 'error') {
-        showToast(result.error ?? 'Cloud setup failed', 'error');
+        useToastStore
+          .getState()
+          .show(result.error ?? 'Cloud setup failed', 'error');
         setView({ type: 'prompt' });
         return;
       }
@@ -756,7 +758,7 @@ function SessionsApp({
         setView({ type: 'prompt' });
       }
     },
-    [view, showToast, startSession, resumeSessionFlow],
+    [view, startSession, resumeSessionFlow],
   );
 
   // ---- Initial Loading View ----
