@@ -21,12 +21,12 @@ import {
 } from '../services/sessionDisplay';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
+import { useToastStore } from '../stores/toastStore';
 import { formatShellError, type ShellError } from '../utils';
 import { ConfirmModal } from './ConfirmModal';
 import { Frame } from './Frame';
 import { HotkeysBar } from './HotkeysBar';
 import { LogViewer } from './LogViewer';
-import { Toast, type ToastType } from './Toast';
 
 /** Cache TTL in milliseconds (60 seconds) */
 const PR_CACHE_TTL = 60_000;
@@ -44,12 +44,6 @@ export interface SessionDetailProps {
 
 type ModalType = 'stop' | 'delete' | null;
 
-interface ToastState {
-  message: string;
-  type: ToastType;
-  duration?: number;
-}
-
 export function SessionDetail({
   session: initialSession,
   onBack,
@@ -63,7 +57,6 @@ export function SessionDetail({
   const { prCache, setPrInfo } = useSessionStore();
   const [session, setSession] = useState(initialSession);
   const [modal, setModal] = useState<ModalType>(null);
-  const [toast, setToast] = useState<ToastState | null>(null);
   const [actionInProgress, setActionInProgress] = useState(false);
   const { isTall } = useWindowSize();
 
@@ -121,7 +114,7 @@ export function SessionDetail({
         setSession(updated);
       } else {
         // Container no longer exists
-        setToast({ message: 'Container no longer exists', type: 'error' });
+        useToastStore.getState().show('Container no longer exists', 'error');
         setTimeout(() => onSessionDeleted(), 1500);
       }
       // Also refresh PR info if stale
@@ -131,17 +124,13 @@ export function SessionDetail({
     return () => clearInterval(interval);
   }, [session.id, sessionProvider, onSessionDeleted, fetchPrInfo]);
 
-  const showToast = useCallback((message: string, type: ToastType) => {
-    setToast({ message, type });
-  }, []);
-
   const handleStop = useCallback(async () => {
     setModal(null);
     setActionInProgress(true);
-    showToast('Stopping container...', 'info');
+    useToastStore.getState().show('Stopping container...', 'info');
     try {
       await sessionProvider.stop(session.id);
-      showToast('Container stopped', 'success');
+      useToastStore.getState().show('Container stopped', 'success');
       // Refresh session
       const updated = await sessionProvider.get(session.id);
       if (updated) {
@@ -149,46 +138,39 @@ export function SessionDetail({
       }
     } catch (err) {
       log.error({ err }, `Failed to stop container ${session.id}`);
-      showToast(`Failed to stop: ${err}`, 'error');
+      useToastStore.getState().show(`Failed to stop: ${err}`, 'error');
     } finally {
       setActionInProgress(false);
     }
-  }, [session.id, sessionProvider, showToast]);
+  }, [session.id, sessionProvider]);
 
   const handleDelete = useCallback(async () => {
     setModal(null);
     setActionInProgress(true);
     try {
       await sessionProvider.remove(session.id);
-      showToast('Container removed', 'success');
+      useToastStore.getState().show('Container removed', 'success');
       setTimeout(() => onSessionDeleted(), 1000);
     } catch (err) {
       log.error({ err }, `Failed to remove container ${session.id}`);
-      showToast(`Failed to remove: ${err}`, 'error');
+      useToastStore.getState().show(`Failed to remove: ${err}`, 'error');
       setActionInProgress(false);
     }
-  }, [session.id, sessionProvider, showToast, onSessionDeleted]);
+  }, [session.id, sessionProvider, onSessionDeleted]);
 
   const handleResume = useCallback(() => {
     onResume(session);
   }, [onResume, session]);
 
-  const handleLogError = useCallback(
-    (error: string) => {
-      showToast(error, 'error');
-    },
-    [showToast],
-  );
+  const handleLogError = useCallback((error: string) => {
+    useToastStore.getState().show(error, 'error');
+  }, []);
 
   // Handle prompt click to copy to clipboard
   const handlePromptClick = useCallback(() => {
     if (session.prompt) {
       copyToClipboard(session.prompt);
-      setToast({
-        message: 'Prompt copied to clipboard',
-        type: 'info',
-        duration: 1500,
-      });
+      useToastStore.getState().show('Prompt copied to clipboard', 'info', 1500);
     }
   }, [session.prompt]);
 
@@ -197,18 +179,15 @@ export function SessionDetail({
     if (prInfo) {
       open(prInfo.url)
         .then(() => {
-          setToast({
-            message: `Opening PR #${prInfo.number}...`,
-            type: 'info',
-            duration: 1000,
-          });
+          useToastStore
+            .getState()
+            .show(`Opening PR #${prInfo.number}...`, 'info', 1000);
         })
         .catch((err) => {
           log.error({ err }, 'Failed to open PR URL in browser');
-          setToast({
-            message: `Failed to open PR in browser`,
-            type: 'error',
-          });
+          useToastStore
+            .getState()
+            .show('Failed to open PR in browser', 'error');
         });
     }
   }, [prInfo]);
@@ -218,15 +197,17 @@ export function SessionDetail({
     setActionInProgress(true);
     try {
       await Bun.$`git fetch && git switch ${branchName}`.quiet();
-      showToast(`Switched to branch ${branchName}`, 'success');
+      useToastStore
+        .getState()
+        .show(`Switched to branch ${branchName}`, 'success');
     } catch (err) {
       const formattedError = formatShellError(err as ShellError);
       log.error({ err }, `Failed to switch to branch ${branchName}`);
-      showToast(formattedError.message, 'error');
+      useToastStore.getState().show(formattedError.message, 'error');
     } finally {
       setActionInProgress(false);
     }
-  }, [session.branch, showToast]);
+  }, [session.branch]);
 
   // Suspend command keybind dispatch when modal is open
   const suspend = useCommandStore((s) => s.suspend);
@@ -309,10 +290,9 @@ export function SessionDetail({
         keybind: { key: 'o', ctrl: true },
         onSelect: () => {
           if (!prInfo) {
-            setToast({
-              message: 'No PR found for this session',
-              type: 'warning',
-            });
+            useToastStore
+              .getState()
+              .show('No PR found for this session', 'warning');
             return;
           }
           handlePrClick();
@@ -544,16 +524,6 @@ export function SessionDetail({
           confirmColor={theme.warning}
           onConfirm={handleDelete}
           onCancel={() => setModal(null)}
-        />
-      )}
-
-      {/* Toast notifications */}
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          duration={toast.duration}
-          onDismiss={() => setToast(null)}
         />
       )}
     </Frame>
