@@ -78,6 +78,8 @@ export function SessionsList({
     prCache,
     setPrInfo,
     clearPrCache,
+    addPendingDelete,
+    removePendingDelete,
   } = useSessionStore();
   const [sessions, setSessions] = useState<HermesSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -168,8 +170,9 @@ export function SessionsList({
   // Load sessions
   const loadSessions = useCallback(async () => {
     try {
-      const result = await listAllSessions();
-      setSessions(result);
+      const loaded = await listAllSessions();
+      const { pendingDeletes } = useSessionStore.getState();
+      setSessions(loaded.filter((s) => !pendingDeletes.has(s.id)));
       setLoading(false);
     } catch (err) {
       log.error({ err }, 'Failed to load sessions');
@@ -207,6 +210,9 @@ export function SessionsList({
 
     setDeleteModal(null);
 
+    // Mark as pending delete (Layer 1: immediate in-memory hide)
+    addPendingDelete(session.id);
+
     // Immediately remove session from local state
     setSessions((prev) => prev.filter((s) => s.id !== session.id));
     setSelectedSessionId(nextSessionId);
@@ -217,9 +223,19 @@ export function SessionsList({
     useBackgroundTaskStore
       .getState()
       .enqueue(`Deleting "${session.name}"`, async () => {
-        await getProviderForSession(session).remove(session.id);
+        try {
+          await getProviderForSession(session).remove(session.id);
+        } finally {
+          removePendingDelete(session.id);
+        }
       });
-  }, [deleteModal, filteredSessions, setSelectedSessionId]);
+  }, [
+    deleteModal,
+    filteredSessions,
+    setSelectedSessionId,
+    addPendingDelete,
+    removePendingDelete,
+  ]);
 
   const handleStop = useCallback(async () => {
     if (!stopModal) return;
