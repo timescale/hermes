@@ -2,18 +2,22 @@
 // Sessions Command - Unified TUI for hermes
 // ============================================================================
 
+import { useKeyboard } from '@opentui/react';
 import { YAML } from 'bun';
 import { Command } from 'commander';
 import { nanoid } from 'nanoid';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ConfigWizard, type ConfigWizardResult } from '../commands/config.tsx';
+import { BackgroundTaskIndicator } from '../components/BackgroundTaskIndicator';
 import { CloudSetup, type CloudSetupResult } from '../components/CloudSetup';
 import { CopyOnSelect } from '../components/CopyOnSelect';
 import { DockerSetup, type DockerSetupResult } from '../components/DockerSetup';
 import { ensureGhAuth } from '../components/GhAuth.tsx';
+import { GlobalToast } from '../components/GlobalToast';
 import { PromptScreen, type SubmitMode } from '../components/PromptScreen';
 import { SessionDetail } from '../components/SessionDetail';
 import { SessionsList } from '../components/SessionsList';
+import { ShutdownOverlay } from '../components/ShutdownOverlay';
 import { StartingScreen } from '../components/StartingScreen';
 import { Toast, type ToastType } from '../components/Toast';
 import { checkClaudeCredentials, ensureClaudeAuth } from '../services/claude';
@@ -54,6 +58,7 @@ import {
   isCompiledBinary,
   performUpdate,
 } from '../services/updater';
+import { useBackgroundTaskStore } from '../stores/backgroundTaskStore';
 import {
   ensureGitignore,
   enterSubprocessScreen,
@@ -232,6 +237,36 @@ function SessionsApp({
     initialMountDir,
     isGitRepo,
   };
+
+  // Graceful shutdown: Ctrl+C handler
+  const pendingCount = useBackgroundTaskStore((s) => s.pendingCount);
+  const shuttingDown = useBackgroundTaskStore((s) => s.shuttingDown);
+  const setShuttingDown = useBackgroundTaskStore((s) => s.setShuttingDown);
+
+  useKeyboard((key) => {
+    if (key.name === 'c' && key.ctrl) {
+      if (shuttingDown) {
+        // Second Ctrl+C: force quit
+        process.exit(1);
+      }
+      if (pendingCount > 0) {
+        // First Ctrl+C with pending tasks: show shutdown overlay
+        setShuttingDown(true);
+        key.stopPropagation();
+        key.preventDefault();
+      } else {
+        // No pending tasks: exit immediately
+        onComplete({ type: 'quit' });
+      }
+    }
+  });
+
+  // Auto-quit when shutting down and all tasks complete
+  useEffect(() => {
+    if (shuttingDown && pendingCount === 0) {
+      onComplete({ type: 'quit' });
+    }
+  }, [shuttingDown, pendingCount, onComplete]);
 
   const showToast = useCallback((message: string, type: ToastType) => {
     setToast({ message, type });
@@ -729,13 +764,9 @@ function SessionsApp({
     return (
       <>
         <StartingScreen step="Initializing" />
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onDismiss={() => setToast(null)}
-          />
-        )}
+        <GlobalToast />
+        <BackgroundTaskIndicator />
+        <ShutdownOverlay />
       </>
     );
   }
@@ -749,13 +780,9 @@ function SessionsApp({
           onComplete={handleDockerComplete}
           showBack={false}
         />
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onDismiss={() => setToast(null)}
-          />
-        )}
+        <GlobalToast />
+        <BackgroundTaskIndicator />
+        <ShutdownOverlay />
       </>
     );
   }
@@ -770,13 +797,9 @@ function SessionsApp({
           showBack
           onBack={() => setView({ type: 'prompt' })}
         />
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onDismiss={() => setToast(null)}
-          />
-        )}
+        <GlobalToast />
+        <BackgroundTaskIndicator />
+        <ShutdownOverlay />
       </>
     );
   }
@@ -786,13 +809,9 @@ function SessionsApp({
     return (
       <>
         <ConfigWizard onComplete={handleConfigComplete} />
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onDismiss={() => setToast(null)}
-          />
-        )}
+        <GlobalToast />
+        <BackgroundTaskIndicator />
+        <ShutdownOverlay />
       </>
     );
   }
@@ -869,13 +888,9 @@ function SessionsApp({
           onCancel={() => onComplete({ type: 'quit' })}
           onViewSessions={() => setView({ type: 'list' })}
         />
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onDismiss={() => setToast(null)}
-          />
-        )}
+        <GlobalToast />
+        <BackgroundTaskIndicator />
+        <ShutdownOverlay />
         <CommandPaletteHost />
       </>
     );
@@ -890,13 +905,9 @@ function SessionsApp({
     return (
       <>
         <StartingScreen step={view.step} hint={hint} />
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onDismiss={() => setToast(null)}
-          />
-        )}
+        <GlobalToast />
+        <BackgroundTaskIndicator />
+        <ShutdownOverlay />
       </>
     );
   }
@@ -927,13 +938,9 @@ function SessionsApp({
           onSessionDeleted={() => setView({ type: 'list' })}
           onNewPrompt={() => setView({ type: 'prompt' })}
         />
-        {toast && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onDismiss={() => setToast(null)}
-          />
-        )}
+        <GlobalToast />
+        <BackgroundTaskIndicator />
+        <ShutdownOverlay />
         <CommandPaletteHost />
       </>
     );
@@ -964,13 +971,9 @@ function SessionsApp({
         onResume={handleResume}
         currentRepo={currentRepoInfo?.fullName}
       />
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onDismiss={() => setToast(null)}
-        />
-      )}
+      <GlobalToast />
+      <BackgroundTaskIndicator />
+      <ShutdownOverlay />
       <CommandPaletteHost />
     </>
   );
@@ -1058,6 +1061,11 @@ export async function runSessionsTui({
 
     // Quit exits the loop
     if (result.type === 'quit') {
+      // Wait for background tasks before exiting
+      const bgStore = useBackgroundTaskStore.getState();
+      if (bgStore.pendingCount > 0) {
+        await bgStore.waitForAll();
+      }
       break;
     }
 
