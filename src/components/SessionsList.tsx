@@ -20,6 +20,7 @@ import {
   getStatusIcon,
   getStatusText,
 } from '../services/sessionDisplay';
+import { useBackgroundTaskStore } from '../stores/backgroundTaskStore';
 import { useSessionStore } from '../stores/sessionStore';
 import { useTheme } from '../stores/themeStore';
 import { useToastStore } from '../stores/toastStore';
@@ -194,32 +195,31 @@ export function SessionsList({
   }, []);
 
   // Delete session handler
-  const handleDelete = useCallback(async () => {
+  const handleDelete = useCallback(() => {
     if (!deleteModal) return;
     const session = deleteModal;
 
-    // Determine which session to select after deletion:
-    // prefer next item, fall back to previous if deleting last item
+    // Determine next selection
     const deleteIndex = filteredSessions.findIndex((s) => s.id === session.id);
     const nextSession =
       filteredSessions[deleteIndex + 1] ?? filteredSessions[deleteIndex - 1];
     const nextSessionId = nextSession?.id ?? null;
 
     setDeleteModal(null);
-    setActionInProgress(true);
-    try {
-      await getProviderForSession(session).remove(session.id);
-      useToastStore.getState().show('Session deleted', 'success');
-      // Update selection before refreshing so it persists
-      setSelectedSessionId(nextSessionId);
-      await loadSessions();
-    } catch (err) {
-      log.error({ err }, `Failed to remove container ${session.id}`);
-      useToastStore.getState().show(`Failed to delete: ${err}`, 'error');
-    } finally {
-      setActionInProgress(false);
-    }
-  }, [deleteModal, filteredSessions, loadSessions, setSelectedSessionId]);
+
+    // Immediately remove session from local state
+    setSessions((prev) => prev.filter((s) => s.id !== session.id));
+    setSelectedSessionId(nextSessionId);
+
+    useToastStore.getState().show('Session deleted', 'success');
+
+    // Enqueue background deletion
+    useBackgroundTaskStore
+      .getState()
+      .enqueue(`Deleting "${session.name}"`, async () => {
+        await getProviderForSession(session).remove(session.id);
+      });
+  }, [deleteModal, filteredSessions, setSelectedSessionId]);
 
   const handleStop = useCallback(async () => {
     if (!stopModal) return;
