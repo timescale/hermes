@@ -6,7 +6,6 @@ import { useKeyboard } from '@opentui/react';
 import open from 'open';
 import { useEffect, useState } from 'react';
 import { copyToClipboard } from '../services/clipboard';
-import { applyHostGhCreds, checkGhCredentials } from '../services/gh';
 import { isGithubAppConfigured } from '../services/githubApp';
 import { startGithubAppAuth } from '../services/githubAppAuth';
 import { log } from '../services/logger';
@@ -121,19 +120,13 @@ export const runGhAuthScreen = async (): Promise<boolean> => {
 };
 
 export const ensureGhAuth = async (): Promise<void> => {
-  // Check if we already have valid credentials (GitHub App, host gh, or keyring)
-  if (await checkGhCredentials()) {
-    return;
-  }
-  log.warn('GitHub credentials are missing or expired.');
-
-  // Check if GitHub App credentials are valid (may have been invalidated)
+  // If GitHub App credentials already exist and are valid, we're done.
+  // This is the only check — we intentionally don't fall back to host gh
+  // credentials here because the purpose of this flow is to obtain a
+  // GitHub App token specifically.
   if (await isGithubAppConfigured()) {
     return;
   }
-
-  // Try to import host gh credentials
-  if (await applyHostGhCreds()) return;
 
   // Run the GitHub App device flow interactively
   if (!(await runGhAuthScreen())) {
