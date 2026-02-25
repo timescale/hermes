@@ -412,6 +412,7 @@ export async function listHermesImages(): Promise<DockerImageInfo[]> {
     'hermes-resume',
   ];
 
+  const seen = new Set<string>();
   const images: DockerImageInfo[] = [];
   for (const pattern of patterns) {
     try {
@@ -419,6 +420,12 @@ export async function listHermesImages(): Promise<DockerImageInfo[]> {
       const lines = result.stdout.toString().trim().split('\n').filter(Boolean);
       for (const line of lines) {
         const info = JSON.parse(line);
+        // Deduplicate by repository:tag since docker image ls can return
+        // overlapping results across patterns (e.g. same underlying image
+        // tagged in multiple repositories)
+        const key = `${info.Repository}:${info.Tag}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
         images.push({
           id: info.ID,
           repository: info.Repository,

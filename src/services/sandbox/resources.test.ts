@@ -484,6 +484,36 @@ describe('classifyDockerImage', () => {
     expect(result.size).toBe(123456789);
     expect(result.createdAt).toBe('2025-02-01T12:00:00Z');
   });
+
+  test('uses repository:tag as id (not Docker image ID) to avoid key collisions', () => {
+    // Two different repo:tag combos can share the same Docker image ID
+    const image1 = makeImage({
+      id: 'sha256:sameid',
+      repository: 'hermes-sandbox',
+      tag: 'md5-abcdef123456',
+    });
+    const image2 = makeImage({
+      id: 'sha256:sameid',
+      repository: 'ghcr.io/timescale/hermes/sandbox-slim',
+      tag: '0.12.0',
+    });
+
+    const ctx = {
+      currentDockerfileHash: 'abcdef123456',
+      currentGhcrTags: new Set([
+        'ghcr.io/timescale/hermes/sandbox-slim:0.12.0',
+      ]),
+      activeContainerIdPrefixes: new Set<string>(),
+    };
+
+    const r1 = classifyDockerImage(image1, ctx);
+    const r2 = classifyDockerImage(image2, ctx);
+
+    // IDs must be unique even when Docker image IDs are the same
+    expect(r1.id).not.toBe(r2.id);
+    expect(r1.id).toBe('hermes-sandbox:md5-abcdef123456');
+    expect(r2.id).toBe('ghcr.io/timescale/hermes/sandbox-slim:0.12.0');
+  });
 });
 
 // ============================================================================

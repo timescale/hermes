@@ -219,11 +219,14 @@ export function classifyDockerImage(
   image: DockerImageInfo,
   ctx: ImageClassificationContext,
 ): SandboxResource {
+  // Use repository:tag as ID (not Docker image ID) because multiple
+  // tags can share the same Docker image ID, causing key collisions.
+  const fullName = `${image.repository}:${image.tag}`;
   const base: Omit<SandboxResource, 'category' | 'status'> = {
-    id: image.id,
+    id: fullName,
     provider: 'docker',
     kind: 'image',
-    name: `${image.repository}:${image.tag}`,
+    name: fullName,
     size: image.size,
     createdAt: image.created,
   };
