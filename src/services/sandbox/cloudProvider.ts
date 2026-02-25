@@ -2,6 +2,7 @@
 // Cloud Sandbox Provider - Deno Deploy implementation using @deno/sandbox SDK
 // ============================================================================
 
+import type { Database } from 'bun:sqlite';
 import type { Sandbox } from '@deno/sandbox';
 import { runCloudSetupScreen } from '../../components/CloudSetup.tsx';
 import {
@@ -857,32 +858,42 @@ export class CloudSandboxProvider implements SandboxProvider {
   async list(): Promise<HermesSession[]> {
     const db = openSessionDb();
 
-    // Get sessions from SQLite
+    // Return sessions from SQLite immediately for fast startup.
+    // Fire off a background sync against the Deno API so that stale
+    // "running" statuses get corrected on the next poll/refresh.
     const dbSessions = dbListSessions(db, { provider: 'cloud' });
 
-    // If we have a client, try to sync status from Deno API
-    try {
-      const client = await this.getClient();
-      const runningSandboxes = await client.listSandboxes({
-        'hermes.managed': 'true',
-      });
-
-      const runningIds = new Set(
-        runningSandboxes.filter((s) => s.status === 'running').map((s) => s.id),
-      );
-
-      // Update status for sessions that are no longer running
-      for (const session of dbSessions) {
-        if (session.status === 'running' && !runningIds.has(session.id)) {
-          updateSessionStatus(db, session.id, 'exited');
-          session.status = 'exited';
-        }
-      }
-    } catch (err) {
+    this.syncSessionStatuses(db, dbSessions).catch((err) => {
       log.debug({ err }, 'Failed to sync cloud session status');
-    }
+    });
 
     return dbSessions;
+  }
+
+  /**
+   * Background sync: reconcile locally-cached session statuses against
+   * the Deno Deploy API. Sessions marked "running" locally that are no
+   * longer running in the API are updated to "exited".
+   */
+  private async syncSessionStatuses(
+    db: Database,
+    sessions: HermesSession[],
+  ): Promise<void> {
+    const client = await this.getClient();
+    const runningSandboxes = await client.listSandboxes({
+      'hermes.managed': 'true',
+    });
+
+    const runningIds = new Set(
+      runningSandboxes.filter((s) => s.status === 'running').map((s) => s.id),
+    );
+
+    for (const session of sessions) {
+      if (session.status === 'running' && !runningIds.has(session.id)) {
+        updateSessionStatus(db, session.id, 'exited');
+        session.status = 'exited';
+      }
+    }
   }
 
   async get(sessionId: string): Promise<HermesSession | null> {

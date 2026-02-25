@@ -8,11 +8,7 @@ import { useCommandStore, useRegisterCommands } from '../services/commands.tsx';
 import { formatCpuPercent, formatMemUsage } from '../services/docker';
 import { getPrForBranch, type PrInfo } from '../services/github';
 import { log } from '../services/logger';
-import {
-  getSandboxProvider,
-  type HermesSession,
-  type SandboxProvider,
-} from '../services/sandbox';
+import { getSandboxProvider, type HermesSession } from '../services/sandbox';
 import {
   fetchDockerStats,
   formatRelativeTime,
@@ -34,7 +30,6 @@ const PR_CACHE_TTL = 60_000;
 
 export interface SessionDetailProps {
   session: HermesSession;
-  provider: SandboxProvider;
   onBack: () => void;
   onAttach: (sessionId: string) => void;
   onShell: (sessionId: string) => void;

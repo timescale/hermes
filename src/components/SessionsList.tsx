@@ -12,7 +12,6 @@ import {
   getProviderForSession,
   type HermesSession,
   listAllSessions,
-  type SandboxProvider,
 } from '../services/sandbox';
 import {
   fetchDockerStats,
@@ -36,7 +35,6 @@ export type FilterMode = 'all' | 'running' | 'completed';
 export type ScopeMode = 'local' | 'global';
 
 export interface SessionsListProps {
-  provider: SandboxProvider;
   onSelect: (session: HermesSession) => void;
   onQuit: () => void;
   onNewTask?: () => void;

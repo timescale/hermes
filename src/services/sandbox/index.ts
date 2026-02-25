@@ -19,7 +19,6 @@ export type {
 } from './types.ts';
 
 import { readConfig } from '../config.ts';
-import { getDenoToken } from '../deno.ts';
 import { log } from '../logger.ts';
 import { CloudSandboxProvider } from './cloudProvider.ts';
 import { DockerSandboxProvider } from './dockerProvider.ts';
@@ -65,13 +64,7 @@ export function getProviderForSession(session: HermesSession): SandboxProvider {
  * Returns a single merged list, sorted by creation time descending.
  */
 export async function listAllSessions(): Promise<HermesSession[]> {
-  const providerTypes: SandboxProviderType[] = ['docker'];
-
-  // Only include cloud provider if a deno token is configured
-  const denoToken = await getDenoToken();
-  if (denoToken) {
-    providerTypes.push('cloud');
-  }
+  const providerTypes: SandboxProviderType[] = ['docker', 'cloud'];
 
   const providers = providerTypes.map((type) => ({
     type,

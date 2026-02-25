@@ -998,7 +998,6 @@ function SessionsApp({
       <>
         <SessionDetail
           session={view.session}
-          provider={provider}
           onBack={() => setView({ type: 'list' })}
           onAttach={(sessionId) =>
             onComplete({
@@ -1030,7 +1029,6 @@ function SessionsApp({
   return (
     <>
       <SessionsList
-        provider={provider}
         onSelect={(session) => setView({ type: 'detail', session })}
         onQuit={() => onComplete({ type: 'quit' })}
         onNewTask={() => setView({ type: 'prompt' })}
@@ -1077,7 +1075,6 @@ export async function runSessionsTui({
   const provider = sandboxProvider
     ? getSandboxProvider(sandboxProvider)
     : await getDefaultProvider();
-  await provider.ensureReady();
 
   // Try to detect current repo (returns null if not in a git repo)
   const currentRepoInfo = await tryGetRepoInfo();
