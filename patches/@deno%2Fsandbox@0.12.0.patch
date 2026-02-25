@@ -1,11 +1,14 @@
 diff --git a/node_modules/@deno/sandbox/.bun-tag-1542d780850fb00a b/.bun-tag-1542d780850fb00a
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@deno/sandbox/.bun-tag-15c3e227c5c068b6 b/.bun-tag-15c3e227c5c068b6
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/@deno/sandbox/.bun-tag-94ae5fdf64f831c8 b/.bun-tag-94ae5fdf64f831c8
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/esm/transport.js b/esm/transport.js
-index fb16fcef772172196761b1e7eea7e1363f50895f..704d3588f92295f6bc1d34015c7ed5956241f436 100644
+index fb16fcef772172196761b1e7eea7e1363f50895f..c39b591a5e559bbad0d611d3f90dea8a71828346 100644
 --- a/esm/transport.js
 +++ b/esm/transport.js
 @@ -1,6 +1,16 @@
@@ -240,13 +243,13 @@ index fb16fcef772172196761b1e7eea7e1363f50895f..704d3588f92295f6bc1d34015c7ed595
 -            return;
 +
 +    function wsSend(text) {
-+        if (socket && !socket.destroyed) {
++        if (socket && !socket.destroyed && !socket.writableEnded) {
 +            socket.write(encodeTextFrame(text));
          }
 +    }
 +
 +    function wsClose(code, reason) {
-+        if (socket && !socket.destroyed) {
++        if (socket && !socket.destroyed && !socket.writableEnded) {
 +            socket.write(encodeCloseFrame(code || 1000, reason || ""));
 +            socket.end();
 +        }

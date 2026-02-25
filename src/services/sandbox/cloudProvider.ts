@@ -234,6 +234,7 @@ async function provisionSandbox(
     // Setup failed — tear down cloud sandbox and volume so we don't
     // leak resources (especially important given the 5-sandbox limit).
     const message = err instanceof Error ? err.message : String(err);
+    log.error({ err, sessionId }, `Sandbox provisioning failed: ${message}`);
     await logToSandbox(sandbox, `ERROR: Provisioning failed — ${message}`);
     await cleanupSandboxResources(sandbox, client, sessionId, volumeSlug);
     throw err;
