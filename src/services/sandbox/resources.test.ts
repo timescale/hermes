@@ -194,12 +194,13 @@ describe('classifyCloudSnapshot', () => {
 // ============================================================================
 
 describe('classifyCloudVolume', () => {
-  test('build volume (hbb-*) is always orphaned', () => {
+  test('build volume (hbb-*) is orphaned when not source of current base snapshot', () => {
     const volume = makeVolume({
       slug: 'hbb-build-abc123',
     });
 
     const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: null,
       sessionsByVolumeSlug: new Map(),
       deletedSessionsByVolumeSlug: new Map(),
     });
@@ -208,6 +209,36 @@ describe('classifyCloudVolume', () => {
     expect(result.category).toBe('Build Volume');
     expect(result.provider).toBe('cloud');
     expect(result.kind).toBe('volume');
+  });
+
+  test('build volume (hbb-*) is current when source of current base snapshot', () => {
+    const volume = makeVolume({
+      slug: 'hbb-build-abc123',
+    });
+
+    const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: 'hbb-build-abc123',
+      sessionsByVolumeSlug: new Map(),
+      deletedSessionsByVolumeSlug: new Map(),
+    });
+
+    expect(result.status).toBe('current');
+    expect(result.category).toBe('Build Volume');
+  });
+
+  test('build volume (hbb-*) is orphaned when different from current base volume', () => {
+    const volume = makeVolume({
+      slug: 'hbb-old-build-xyz789',
+    });
+
+    const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: 'hbb-build-abc123',
+      sessionsByVolumeSlug: new Map(),
+      deletedSessionsByVolumeSlug: new Map(),
+    });
+
+    expect(result.status).toBe('orphaned');
+    expect(result.category).toBe('Build Volume');
   });
 
   test('active session volume (hs-*) linked to non-deleted session', () => {
@@ -220,6 +251,7 @@ describe('classifyCloudVolume', () => {
     });
 
     const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: null,
       sessionsByVolumeSlug: new Map([['hs-my-session-abc123', session]]),
       deletedSessionsByVolumeSlug: new Map(),
     });
@@ -239,6 +271,7 @@ describe('classifyCloudVolume', () => {
     });
 
     const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: null,
       sessionsByVolumeSlug: new Map([['hr-resumed-abc123', session]]),
       deletedSessionsByVolumeSlug: new Map(),
     });
@@ -258,6 +291,7 @@ describe('classifyCloudVolume', () => {
     });
 
     const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: null,
       sessionsByVolumeSlug: new Map(),
       deletedSessionsByVolumeSlug: new Map([
         ['hs-deleted-abc123', deletedSession],
@@ -275,6 +309,7 @@ describe('classifyCloudVolume', () => {
     });
 
     const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: null,
       sessionsByVolumeSlug: new Map(),
       deletedSessionsByVolumeSlug: new Map(),
     });
@@ -289,6 +324,7 @@ describe('classifyCloudVolume', () => {
     });
 
     const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: null,
       sessionsByVolumeSlug: new Map(),
       deletedSessionsByVolumeSlug: new Map(),
     });
@@ -306,6 +342,7 @@ describe('classifyCloudVolume', () => {
     });
 
     const result = classifyCloudVolume(volume, {
+      currentBaseVolumeSlug: null,
       sessionsByVolumeSlug: new Map(),
       deletedSessionsByVolumeSlug: new Map(),
     });

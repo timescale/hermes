@@ -64,6 +64,8 @@ interface SnapshotClassificationContext {
 }
 
 interface VolumeClassificationContext {
+  /** Slug of the volume that is the source of the current base snapshot (if known) */
+  currentBaseVolumeSlug: string | null;
   sessionsByVolumeSlug: Map<string, HermesSession>;
   deletedSessionsByVolumeSlug: Map<string, HermesSession>;
 }
@@ -139,10 +141,11 @@ export function classifyCloudSnapshot(
 }
 
 /**
- * Classify a cloud volume as active/old/orphaned.
+ * Classify a cloud volume as current/active/old/orphaned.
  *
  * Rules:
- * - `hbb-*` → "Build Volume": always `orphaned` (leftover from build)
+ * - `hbb-*` → "Build Volume": `current` if it is the source volume of the
+ *   current base snapshot, else `orphaned`
  * - `hs-*` / `hr-*` → "Session Volume": `active` if linked to non-deleted session,
  *   `old` if linked to deleted session, `orphaned` if no session reference
  * - `hsh-*` → "Shell Volume": always `orphaned` (ephemeral, shouldn't persist)
@@ -161,12 +164,15 @@ export function classifyCloudVolume(
     bootable: volume.bootable,
   };
 
-  // Build volumes — always orphaned
+  // Build volumes — current if source of the current base snapshot, else orphaned
   if (volume.slug.startsWith('hbb-')) {
     return {
       ...base,
       category: 'Build Volume',
-      status: 'orphaned',
+      status:
+        ctx.currentBaseVolumeSlug && volume.slug === ctx.currentBaseVolumeSlug
+          ? 'current'
+          : 'orphaned',
     };
   }
 
@@ -345,6 +351,11 @@ async function discoverCloudResources(
     'Cloud resources fetched',
   );
 
+  // Find the source volume of the current base snapshot so we can
+  // classify the corresponding build volume as "current" rather than "orphaned".
+  const currentBaseSnapshot = snapshots.find((s) => s.slug === currentBaseSlug);
+  const currentBaseVolumeSlug = currentBaseSnapshot?.volume.slug ?? null;
+
   const resources: SandboxResource[] = [];
 
   for (const snapshot of snapshots) {
@@ -360,6 +371,7 @@ async function discoverCloudResources(
   for (const volume of volumes) {
     resources.push(
       classifyCloudVolume(volume, {
+        currentBaseVolumeSlug,
         sessionsByVolumeSlug: lookups.sessionsByVolumeSlug,
         deletedSessionsByVolumeSlug: lookups.deletedSessionsByVolumeSlug,
       }),
