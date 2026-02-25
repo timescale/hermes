@@ -1,6 +1,6 @@
 #!/bin/bash
 # hermes installer - Install script for macOS/Linux
-# Usage: curl -fsSL https://hermes.ghost.build | sh
+# Usage: curl -fsSL https://install.hermetic.ly | sh
 
 set -e
 

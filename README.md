@@ -7,7 +7,7 @@ A CLI tool to run AI coding agents in isolated sandboxes per task.
 ### Quick Install (Recommended)
 
 ```bash
-curl -fsSL https://hermes.ghost.build | sh
+curl -fsSL https://install.hermetic.ly | sh
 ```
 
 After installation, restart your shell or run `source ~/.zshrc` (or `source ~/.bashrc`) to update your PATH.
