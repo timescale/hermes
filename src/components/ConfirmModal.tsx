@@ -25,7 +25,6 @@ export function ConfirmModal({
     {
       key: 'enter',
       name: confirmLabel,
-      description: 'remove the container',
       onSelect: onConfirm,
       color: confirmColor ?? theme.success,
     },
