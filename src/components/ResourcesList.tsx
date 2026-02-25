@@ -279,6 +279,7 @@ export function ResourcesList({ onBack }: ResourcesListProps) {
         keybind: [
           { key: 'delete', display: 'delete' },
           { key: 'backspace', display: 'backspace' },
+          { key: 'd', ctrl: true },
         ],
         enabled: !!selected,
         onSelect: () => {
@@ -291,7 +292,7 @@ export function ResourcesList({ onBack }: ResourcesListProps) {
         title: 'Cleanup old & orphaned resources',
         description: `Delete all old and orphaned resources (${cleanupTargets.length} targets)`,
         category: 'Resources',
-        keybind: { key: 'd', ctrl: true },
+        keybind: { key: 'x', ctrl: true },
         enabled: cleanupTargets.length > 0,
         onSelect: () => {
           if (cleanupTargets.length > 0) {
@@ -535,8 +536,8 @@ export function ResourcesList({ onBack }: ResourcesListProps) {
 
       <HotkeysBar
         keyList={[
-          ['delete', 'delete'],
-          ['ctrl+d', 'cleanup'],
+          ['ctrl+d', 'delete'],
+          ['ctrl+x', 'cleanup'],
           ['tab', 'filter'],
           ['f2', 'refresh'],
           ['esc', 'back'],
