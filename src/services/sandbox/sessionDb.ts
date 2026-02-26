@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { userConfigDir } from '../config.ts';
 import { log } from '../logger.ts';
+import { initPromptHistorySchema } from '../promptHistoryDb.ts';
 import type { OxSession, SandboxProviderType } from './types.ts';
 
 // ============================================================================
@@ -72,6 +73,7 @@ export function openSessionDb(): Database {
   log.debug(`Opening session database at ${dbPath}`);
   const db = new Database(dbPath);
   initSessionSchema(db);
+  initPromptHistorySchema(db);
   _db = db;
   return db;
 }
