@@ -1,26 +1,30 @@
 import { useWindowSize } from '../hooks/useWindowSize';
 import { useTheme } from '../stores/themeStore';
 
-const TITLE_MAX_WIDTH = 76;
 const TITLE_PADDING = 4;
 
 // Solid block characters get the main bright color
 const SOLID_CHARS = new Set(['█', '▀', '▄', '▌', '▐', '░', '▒', '▓']);
 
-const OX_TITLE_WIDE = [
-  '██╗  ██╗███████╗██████╗ ███╗   ███╗███████╗███████╗',
-  '██║  ██║██╔════╝██╔══██╗████╗ ████║██╔════╝██╔════╝',
-  '███████║█████╗  ██████╔╝██╔████╔██║█████╗  ███████╗',
-  '██╔══██║██╔══╝  ██╔══██╗██║╚██╔╝██║██╔══╝  ╚════██║',
-  '██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗███████║',
-  '╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝',
+// Block-letter "OX" text (always shown)
+const OX_TEXT = [
+  ' ██████╗ ██╗  ██╗',
+  '██╔═══██╗╚██╗██╔╝',
+  '██║   ██║ ╚███╔╝ ',
+  '██║   ██║ ██╔██╗ ',
+  '╚██████╔╝██╔╝ ██╗',
+  ' ╚═════╝ ╚═╝  ╚═╝',
 ];
 
-const OX_TITLE_NARROW = `
-▄  ▄ ▄▄▄▄ ▄▄▄  ▄   ▄ ▄▄▄▄ ▄▄▄▄
-█▄▄█ █▄▄  █▄▄▀ █▀▄▀█ █▄▄  ▀▄▄ 
-█  █ █▄▄▄ █ ▀▄ █   █ █▄▄▄ ▄▄▄▀
-`.trim();
+// Line-art ox animal (shown when wide enough), padded to same height as OX_TEXT
+const OX_ANIMAL = [
+  '',
+  '\\|/          (__)',
+  '     `\\------(oo)',
+  '       ||    (__)',
+  '       ||w--||     \\|/',
+  '  \\|/',
+];
 
 type CharType = 'solid' | 'outline' | 'space';
 
@@ -61,57 +65,84 @@ function linesToSegments(lines: string[]) {
   });
 }
 
-const OX_TITLE_WIDE_SEGMENTS = linesToSegments(OX_TITLE_WIDE);
-const OX_TITLE_WIDE_WIDTH = getMaxLineLength(OX_TITLE_WIDE);
+const OX_TEXT_SEGMENTS = linesToSegments(OX_TEXT);
+const OX_TEXT_WIDTH = getMaxLineLength(OX_TEXT);
+const OX_ANIMAL_SEGMENTS = linesToSegments(OX_ANIMAL);
+const OX_ANIMAL_WIDTH = getMaxLineLength(OX_ANIMAL);
+const ANIMAL_GAP = 3;
+const WIDE_TITLE_WIDTH = OX_TEXT_WIDTH + ANIMAL_GAP + OX_ANIMAL_WIDTH;
+
+type Segments = { text: string; type: CharType }[][];
+
+function SegmentRows({
+  segments,
+  theme,
+  keyPrefix,
+}: {
+  segments: Segments;
+  theme: { text: string; textMuted: string };
+  keyPrefix: string;
+}) {
+  return segments.map((rowSegments) => {
+    const rowKey = rowSegments
+      .map((segment) => `${segment.type}:${segment.text}`)
+      .join('|');
+    let segmentOffset = 0;
+
+    return (
+      <box flexDirection="row" key={`${keyPrefix}-row-${rowKey}`}>
+        {rowSegments.map((segment) => {
+          const fg =
+            segment.type === 'solid'
+              ? theme.text
+              : segment.type === 'outline'
+                ? theme.textMuted
+                : undefined;
+          const segmentKey = `${keyPrefix}-seg-${rowKey}-${segment.type}-${segmentOffset}`;
+          segmentOffset += segment.text.length;
+          return (
+            <text key={segmentKey} fg={fg}>
+              {segment.text}
+            </text>
+          );
+        })}
+      </box>
+    );
+  });
+}
 
 /**
  * Responsive ASCII art title for "ox".
- * Switches between wide and narrow versions based on terminal width.
+ * Always shows block-letter "OX" text.
+ * When the terminal is wide enough, also shows a line-art ox animal to the right.
  */
 export function OxTitle() {
   const { theme } = useTheme();
   const { columns } = useWindowSize();
 
-  const containerWidth = Math.min(
-    Math.max(columns - TITLE_PADDING, 0),
-    TITLE_MAX_WIDTH,
-  );
-  const isWideTitle = containerWidth >= OX_TITLE_WIDE_WIDTH + 10;
+  const containerWidth = Math.max(columns - TITLE_PADDING, 0);
+  const isWideTitle = containerWidth >= WIDE_TITLE_WIDTH;
 
   return (
     <box marginBottom={2} width="100%" alignItems="center">
-      {isWideTitle ? (
-        <box flexDirection="column" alignItems="center">
-          {OX_TITLE_WIDE_SEGMENTS.map((segments) => {
-            const rowKey = segments
-              .map((segment) => `${segment.type}:${segment.text}`)
-              .join('|');
-            let segmentOffset = 0;
-
-            return (
-              <box flexDirection="row" key={`title-row-${rowKey}`}>
-                {segments.map((segment) => {
-                  const fg =
-                    segment.type === 'solid'
-                      ? theme.text
-                      : segment.type === 'outline'
-                        ? theme.textMuted
-                        : undefined;
-                  const segmentKey = `title-segment-${rowKey}-${segment.type}-${segmentOffset}`;
-                  segmentOffset += segment.text.length;
-                  return (
-                    <text key={segmentKey} fg={fg}>
-                      {segment.text}
-                    </text>
-                  );
-                })}
-              </box>
-            );
-          })}
+      <box flexDirection="row" alignItems="flex-start">
+        <box flexDirection="column">
+          <SegmentRows
+            segments={OX_TEXT_SEGMENTS}
+            theme={theme}
+            keyPrefix="text"
+          />
         </box>
-      ) : (
-        <text fg={theme.text}>{OX_TITLE_NARROW}</text>
-      )}
+        {isWideTitle && (
+          <box flexDirection="column" marginLeft={ANIMAL_GAP}>
+            <SegmentRows
+              segments={OX_ANIMAL_SEGMENTS}
+              theme={theme}
+              keyPrefix="animal"
+            />
+          </box>
+        )}
+      </box>
     </box>
   );
 }
