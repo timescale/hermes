@@ -2,7 +2,10 @@ import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { file } from 'bun';
 import { runClaudeAuthScreen } from '../components/ClaudeAuth';
-import type { ClaudeCredentialsJson } from '../types/agentConfig';
+import type {
+  ClaudeCredentialsJson,
+  ClaudeOAuthAccount,
+} from '../types/agentConfig';
 import { Deferred } from '../types/deferred';
 import { readCache, writeCache } from './cache';
 import { CONTAINER_HOME, readFileFromContainer } from './dockerFiles';
@@ -32,6 +35,24 @@ const claudeCredsValid = (creds?: ClaudeCredentialsJson | null): boolean => {
   return expiresAt > Date.now();
 };
 
+/**
+ * Read the oauthAccount field from the host's ~/.claude.json.
+ */
+const readHostOAuthAccount = async (): Promise<ClaudeOAuthAccount | null> => {
+  try {
+    const hostConfigFile = file(homePaths.configJson);
+    if (!(await hostConfigFile.exists())) return null;
+    const config: ClaudeConfigJson = await hostConfigFile.json();
+    if (config.oauthAccount) {
+      log.debug('Found oauthAccount in host .claude.json');
+      return config.oauthAccount;
+    }
+  } catch (err) {
+    log.debug({ err }, 'Failed to read oauthAccount from host .claude.json');
+  }
+  return null;
+};
+
 const readHostCredentials = async (): Promise<ClaudeCredentialsJson | null> => {
   const { username } = userInfo();
   try {
@@ -40,6 +61,7 @@ const readHostCredentials = async (): Promise<ClaudeCredentialsJson | null> => {
       const creds = JSON.parse(raw) as ClaudeCredentialsJson;
       if (claudeCredsValid(creds)) {
         log.debug('Found valid claude credentials in OS keyring');
+        creds.oauthAccount = await readHostOAuthAccount();
         return creds;
       }
       log.debug('Claude credentials present in OS keyring, but invalid.');
@@ -55,6 +77,7 @@ const readHostCredentials = async (): Promise<ClaudeCredentialsJson | null> => {
     const creds = await hostCredsFile.json();
     if (claudeCredsValid(creds)) {
       log.debug('Found valid claude credentials in home directory');
+      creds.oauthAccount = await readHostOAuthAccount();
       return creds;
     }
     log.debug('Claude credentials present in home directory, but invalid.');
@@ -93,6 +116,22 @@ const captureClaudeCredentialsJsonFromContainer = async (
     const creds = JSON.parse(content) as ClaudeCredentialsJson;
     if (claudeCredsValid(creds)) {
       log.debug('Valid claude credentials found in container');
+
+      // Also capture oauthAccount from the container's .claude.json
+      try {
+        const configContent = await readFileFromContainer(
+          containerId,
+          containerPaths.configJson,
+        );
+        const config = JSON.parse(configContent) as ClaudeConfigJson;
+        if (config.oauthAccount) {
+          creds.oauthAccount = config.oauthAccount;
+          log.debug('Captured oauthAccount from container .claude.json');
+        }
+      } catch {
+        log.debug('No .claude.json found in container for oauthAccount');
+      }
+
       await setHermesSecret(HERMES_CREDS_ACCOUNT, JSON.stringify(creds));
       writeCache('claudeCredentialsJson', creds);
       return true;
@@ -106,6 +145,7 @@ const captureClaudeCredentialsJsonFromContainer = async (
 
 interface ClaudeConfigJson {
   primaryApiKey?: string;
+  oauthAccount?: ClaudeOAuthAccount | null;
 }
 
 const projectConfig = {
@@ -244,11 +284,12 @@ export const getClaudeApiKey = async (
 };
 
 export const getClaudeConfigFiles = async (): Promise<VirtualFile[]> => {
-  const creds = (await getClaudeCredentialsJson()) || {};
+  const { oauthAccount, ...creds } = (await getClaudeCredentialsJson()) || {};
   const apiKey = await getClaudeApiKey();
   const config = {
     ...baseConfig,
     ...(apiKey ? { primaryApiKey: apiKey } : null),
+    ...(oauthAccount ? { oauthAccount } : null),
   };
   return [
     {
