@@ -259,11 +259,11 @@ install_binary() {
 # --- Main script ---
 
 echo -e "${BLUE}${BOLD}"
-echo "  _                                   "
-echo " | |__   ___ _ __ _ __ ___   ___  ___ "
-echo " | '_ \\ / _ \\ '__| '_ \` _ \\ / _ \\/ __|"
-echo " | | | |  __/ |  | | | | | |  __/\\__ \\"
-echo " |_| |_|\\___|_|  |_| |_| |_|\\___||___/"
+echo '    ___   __  __'
+echo '   / _ \  \ \/ /'
+echo '  | | | |  \  / '
+echo '  | |_| |  /  \ '
+echo '   \___/  /_/\_\'
 echo -e "${NC}"
 echo -e "${BLUE}Ox Installer${NC}"
 echo ""
