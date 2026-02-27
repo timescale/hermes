@@ -95,3 +95,27 @@ jobs:
           ./bun scripts/npm/publish.ts \
             --version "${GITHUB_REF_NAME#v}" \
             --binaries-dir ./binaries
+
+  publish-homebrew:
+    name: Update Homebrew formula
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./binaries
+          merge-multiple: true
+
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          ./bun scripts/brew/update-formula.ts \
+            --version "${GITHUB_REF_NAME#v}" \
+            --binaries-dir ./binaries

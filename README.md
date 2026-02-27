@@ -14,6 +14,12 @@ After installation, restart your shell or run `source ~/.zshrc` (or `source ~/.b
 
 Re-run the above command at any time to update to the latest version.
 
+#### Install via Homebrew
+
+```bash
+brew install timescale/tap/ox
+```
+
 #### Install via npm
 
 ```bash
