@@ -7,7 +7,7 @@ A CLI tool to run AI coding agents in isolated sandboxes per task.
 ### Quick Install (Recommended)
 
 ```bash
-curl -fsSL https://get.ox.build | sh
+curl -fsSL https://get.ox.build | bash
 ```
 
 After installation, restart your shell or run `source ~/.zshrc` (or `source ~/.bashrc`) to update your PATH.
