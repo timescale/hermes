@@ -141,18 +141,9 @@ export function PromptScreen({
     currentModels?.find((m) => m.id === modelId) ??
     (modelId && agent === 'opencode' ? openCodeIdToModel(modelId) : null);
 
-  // Prompt history — initialize store and restore draft on mount
-  const cursorLineRef = useRef(0);
-  const historyNavigatingRef = useRef(false);
-
+  // Prompt history — initialize store on mount
   useEffect(() => {
-    const store = usePromptHistoryStore.getState();
-    store.initialize();
-    // Restore in-progress draft from a previous screen visit
-    const { draft } = usePromptHistoryStore.getState();
-    if (draft && textareaRef.current) {
-      textareaRef.current.setText(draft);
-    }
+    usePromptHistoryStore.getState().initialize();
   }, []);
 
   // Handle agent switch with model matching (disabled when resuming)
@@ -684,42 +675,36 @@ export function PromptScreen({
       return;
     }
 
-    // Prompt history navigation with up/down arrows
+    // Prompt history navigation with up/down arrows.
+    // Mirrors opencode: up when cursor is at offset 0, down when at end.
     if (key.name === 'up' && !key.ctrl && !key.meta) {
       const textarea = textareaRef.current;
       if (!textarea) return;
-      // Only intercept when cursor is on the first line
-      if (cursorLineRef.current === 0) {
-        const store = usePromptHistoryStore.getState();
-        // Save current text as draft before navigating away
-        if (store.cursor === -1) {
-          store.setDraft(textarea.plainText);
-        }
-        const text = store.navigateUp();
-        if (text !== null) {
-          historyNavigatingRef.current = true;
+      if (textarea.cursorOffset === 0) {
+        const text = usePromptHistoryStore
+          .getState()
+          .move(-1, textarea.plainText);
+        if (text !== undefined) {
           textarea.setText(text);
-          historyNavigatingRef.current = false;
+          textarea.cursorOffset = 0;
         }
+        return;
       }
-      return;
     }
 
     if (key.name === 'down' && !key.ctrl && !key.meta) {
       const textarea = textareaRef.current;
       if (!textarea) return;
-      const lineCount = textarea.lineCount;
-      // Only intercept when cursor is on the last line
-      if (cursorLineRef.current >= lineCount - 1) {
-        const store = usePromptHistoryStore.getState();
-        const text = store.navigateDown();
-        if (text !== null) {
-          historyNavigatingRef.current = true;
+      if (textarea.cursorOffset === textarea.plainText.length) {
+        const text = usePromptHistoryStore
+          .getState()
+          .move(1, textarea.plainText);
+        if (text !== undefined) {
           textarea.setText(text);
-          historyNavigatingRef.current = false;
+          textarea.cursorOffset = textarea.plainText.length;
         }
+        return;
       }
-      return;
     }
 
     // Check for "/" key to start slash command
@@ -801,25 +786,6 @@ export function PromptScreen({
                 placeholder='Ask anything... Type "/" for commands'
                 onSubmit={handleSubmit}
                 onMouseDown={(r: MouseEvent) => r.target?.focus()}
-                onCursorChange={(e: { line: number }) => {
-                  cursorLineRef.current = e.line;
-                }}
-                onContentChange={() => {
-                  // When content changes while viewing a history entry,
-                  // the user is editing it — copy to draft and reset cursor.
-                  // Skip if we triggered the change ourselves via setText().
-                  if (historyNavigatingRef.current) return;
-                  const store = usePromptHistoryStore.getState();
-                  if (store.cursor !== -1) {
-                    const text = textareaRef.current?.plainText ?? '';
-                    store.setDraft(text);
-                    store.resetCursor();
-                  } else {
-                    // Keep draft in sync so it persists across screen switches
-                    const text = textareaRef.current?.plainText ?? '';
-                    store.setDraft(text);
-                  }
-                }}
                 keyBindings={[
                   { name: 'return', ctrl: true, action: 'newline' },
                   { name: 'return', meta: true, action: 'newline' },

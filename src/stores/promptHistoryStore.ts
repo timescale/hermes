@@ -1,12 +1,17 @@
 // ============================================================================
 // Prompt History Store - Zustand store for prompt history navigation
+//
+// Mirrors opencode's history design:
+//   index  0  → current input (no history selected)
+//   index -1  → most recent history entry
+//   index -2  → second most recent, etc.
+// Uses Array.at() for negative indexing.
 // ============================================================================
 
 import { create } from 'zustand';
 import type { PromptHistoryEntry } from '../services/promptHistoryDb.ts';
 import {
   addPromptHistoryEntry,
-  getPromptHistoryCount,
   getRecentPrompts,
 } from '../services/promptHistoryDb.ts';
 import { openSessionDb } from '../services/sandbox/sessionDb.ts';
@@ -14,51 +19,36 @@ import { openSessionDb } from '../services/sandbox/sessionDb.ts';
 const PAGE_SIZE = 50;
 
 export interface PromptHistoryState {
-  /** The user's in-progress prompt text (survives screen switches) */
-  draft: string;
-  /** Window of recent prompts loaded from DB, newest first */
+  /** All loaded history entries, oldest first (chronological order) */
   entries: PromptHistoryEntry[];
-  /** -1 = viewing draft, 0..N = index into entries array */
-  cursor: number;
-  /** Whether older entries exist in DB beyond what's loaded */
-  hasMore: boolean;
+  /**
+   * Navigation index.
+   *  0  = current input (no history selected)
+   * -1  = most recent entry
+   * -2  = second most recent, etc.
+   */
+  index: number;
   /** Whether the store has been initialized from DB */
   initialized: boolean;
 
-  /** Update the in-progress draft text */
-  setDraft: (text: string) => void;
-  /** Record a submitted prompt: persist to DB, prepend to entries, clear draft */
+  /** Record a submitted prompt: persist to DB, append to entries, reset index */
   addEntry: (prompt: string) => void;
   /**
-   * Move cursor toward older entries.
-   * Returns the prompt text to display, or null if already at the oldest loaded
-   * entry with no more to fetch.
+   * Move through history.
+   * @param direction  -1 = older (up arrow), 1 = newer (down arrow)
+   * @param currentInput  The current text in the textarea
+   * @returns The prompt text to display, or undefined if navigation is blocked
    */
-  navigateUp: () => string | null;
-  /**
-   * Move cursor toward newer entries / draft.
-   * Returns the text to display, or null if already viewing the draft.
-   */
-  navigateDown: () => string | null;
-  /** Get the text that should currently be displayed based on cursor position */
-  currentText: () => string;
-  /** Reset cursor to draft position (-1) without clearing draft */
-  resetCursor: () => void;
+  move: (direction: -1 | 1, currentInput: string) => string | undefined;
   /** Load the initial window of recent prompts from DB */
   initialize: () => void;
 }
 
 export const usePromptHistoryStore = create<PromptHistoryState>()(
   (set, get) => ({
-    draft: '',
     entries: [],
-    cursor: -1,
-    hasMore: false,
+    index: 0,
     initialized: false,
-
-    setDraft: (text: string) => {
-      set({ draft: text });
-    },
 
     addEntry: (prompt: string) => {
       const trimmed = prompt.trim();
@@ -69,15 +59,14 @@ export const usePromptHistoryStore = create<PromptHistoryState>()(
 
       const { entries } = get();
 
-      // Skip prepending if it would be a consecutive duplicate
-      const newest = entries[0];
+      // Skip appending if it would be a consecutive duplicate
+      const newest = entries[entries.length - 1];
       if (newest && newest.prompt === trimmed) {
-        set({ draft: '', cursor: -1 });
+        set({ index: 0 });
         return;
       }
 
-      // Prepend the new entry with a synthetic id (actual id from DB not needed
-      // for navigation — it just needs to be higher than any existing entry id)
+      // Append with a synthetic id
       const syntheticId = newest ? newest.id + 1 : 1;
       const entry: PromptHistoryEntry = {
         id: syntheticId,
@@ -86,88 +75,46 @@ export const usePromptHistoryStore = create<PromptHistoryState>()(
       };
 
       set({
-        entries: [entry, ...entries],
-        draft: '',
-        cursor: -1,
+        entries: [...entries, entry],
+        index: 0,
       });
     },
 
-    navigateUp: () => {
-      const { cursor, entries, hasMore } = get();
-      const nextCursor = cursor + 1;
+    move: (direction: -1 | 1, currentInput: string) => {
+      const { entries, index } = get();
+      if (!entries.length) return undefined;
 
-      if (nextCursor < entries.length) {
-        set({ cursor: nextCursor });
-        return entries[nextCursor]?.prompt ?? null;
+      // If we're on a history entry, check that the current input still matches.
+      // If the user has edited it, block navigation (like opencode).
+      const current = entries.at(index);
+      if (current && current.prompt !== currentInput && currentInput.length) {
+        return undefined;
       }
 
-      // At the end of loaded entries — try to fetch more
-      if (hasMore) {
-        const db = openSessionDb();
-        const lastEntry = entries[entries.length - 1];
-        const moreEntries = getRecentPrompts(db, PAGE_SIZE, lastEntry?.id);
-        const totalCount = getPromptHistoryCount(db);
-        const allEntries = [...entries, ...moreEntries];
+      const next = index + direction;
 
-        if (nextCursor < allEntries.length) {
-          set({
-            entries: allEntries,
-            hasMore: allEntries.length < totalCount,
-            cursor: nextCursor,
-          });
-          return allEntries[nextCursor]?.prompt ?? null;
-        }
+      // Don't go beyond the oldest entry
+      if (Math.abs(next) > entries.length) return undefined;
+      // Don't go past 0 (current input)
+      if (next > 0) return undefined;
 
-        // No more entries even after fetch
-        set({
-          entries: allEntries,
-          hasMore: false,
-        });
-      }
+      set({ index: next });
 
-      return null;
-    },
-
-    navigateDown: () => {
-      const { cursor, entries, draft } = get();
-
-      if (cursor <= -1) {
-        // Already viewing draft
-        return null;
-      }
-
-      if (cursor === 0) {
-        // Move back to draft
-        set({ cursor: -1 });
-        return draft;
-      }
-
-      // Move toward newer entries
-      const nextCursor = cursor - 1;
-      set({ cursor: nextCursor });
-      return entries[nextCursor]?.prompt ?? null;
-    },
-
-    currentText: () => {
-      const { cursor, entries, draft } = get();
-      if (cursor === -1) return draft;
-      return entries[cursor]?.prompt ?? draft;
-    },
-
-    resetCursor: () => {
-      set({ cursor: -1 });
+      // index 0 → return empty string (back to current input)
+      if (next === 0) return '';
+      return entries.at(next)?.prompt;
     },
 
     initialize: () => {
       if (get().initialized) return;
 
       const db = openSessionDb();
-      const entries = getRecentPrompts(db, PAGE_SIZE);
-      const totalCount = getPromptHistoryCount(db);
+      // getRecentPrompts returns newest-first; reverse to get chronological order
+      const rows = getRecentPrompts(db, PAGE_SIZE);
+      const entries = rows.reverse();
 
       set({
         entries,
-        hasMore: entries.length < totalCount,
         initialized: true,
       });
     },

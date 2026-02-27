@@ -19,10 +19,8 @@ mock.module('../services/sandbox/sessionDb.ts', () => ({
 
 function resetStore() {
   usePromptHistoryStore.setState({
-    draft: '',
     entries: [],
-    cursor: -1,
-    hasMore: false,
+    index: 0,
     initialized: false,
   });
 }
@@ -40,20 +38,10 @@ describe('promptHistoryStore', () => {
   });
 
   // ==========================================================================
-  // setDraft
-  // ==========================================================================
-
-  test('setDraft updates draft text', () => {
-    const store = usePromptHistoryStore.getState();
-    store.setDraft('hello world');
-    expect(usePromptHistoryStore.getState().draft).toBe('hello world');
-  });
-
-  // ==========================================================================
   // initialize
   // ==========================================================================
 
-  test('initialize loads entries from DB', () => {
+  test('initialize loads entries from DB in chronological order', () => {
     testDb = createTestDb();
     testDb
       .prepare(
@@ -72,8 +60,9 @@ describe('promptHistoryStore', () => {
     const state = usePromptHistoryStore.getState();
     expect(state.initialized).toBe(true);
     expect(state.entries).toHaveLength(2);
-    expect(state.entries[0]?.prompt).toBe('prompt two');
-    expect(state.entries[1]?.prompt).toBe('prompt one');
+    // Chronological order: oldest first
+    expect(state.entries[0]?.prompt).toBe('prompt one');
+    expect(state.entries[1]?.prompt).toBe('prompt two');
   });
 
   test('initialize is idempotent', () => {
@@ -88,7 +77,7 @@ describe('promptHistoryStore', () => {
   // addEntry
   // ==========================================================================
 
-  test('addEntry persists to DB and prepends to entries', () => {
+  test('addEntry persists to DB and appends to entries', () => {
     testDb = createTestDb();
     const store = usePromptHistoryStore.getState();
     store.initialize();
@@ -98,8 +87,7 @@ describe('promptHistoryStore', () => {
     const state = usePromptHistoryStore.getState();
     expect(state.entries).toHaveLength(1);
     expect(state.entries[0]?.prompt).toBe('new prompt');
-    expect(state.draft).toBe('');
-    expect(state.cursor).toBe(-1);
+    expect(state.index).toBe(0);
   });
 
   test('addEntry skips consecutive duplicates', () => {
@@ -108,7 +96,7 @@ describe('promptHistoryStore', () => {
     store.initialize();
 
     store.addEntry('same prompt');
-    store.addEntry('same prompt');
+    usePromptHistoryStore.getState().addEntry('same prompt');
 
     const state = usePromptHistoryStore.getState();
     expect(state.entries).toHaveLength(1);
@@ -120,29 +108,36 @@ describe('promptHistoryStore', () => {
     store.initialize();
 
     store.addEntry('');
-    store.addEntry('   ');
+    usePromptHistoryStore.getState().addEntry('   ');
 
     expect(usePromptHistoryStore.getState().entries).toHaveLength(0);
   });
 
-  test('addEntry clears draft and resets cursor', () => {
+  test('addEntry resets index to 0', () => {
     testDb = createTestDb();
+    testDb
+      .prepare(
+        'INSERT INTO prompt_history (prompt, created_at) VALUES ($p, $c)',
+      )
+      .run({ $p: 'old', $c: '2025-01-01T00:00:00Z' });
+
     const store = usePromptHistoryStore.getState();
     store.initialize();
 
-    store.setDraft('work in progress');
-    store.addEntry('submitted prompt');
+    // Navigate into history
+    store.move(-1, '');
+    expect(usePromptHistoryStore.getState().index).toBe(-1);
 
-    const state = usePromptHistoryStore.getState();
-    expect(state.draft).toBe('');
-    expect(state.cursor).toBe(-1);
+    // Submit resets index
+    usePromptHistoryStore.getState().addEntry('submitted prompt');
+    expect(usePromptHistoryStore.getState().index).toBe(0);
   });
 
   // ==========================================================================
-  // navigateUp / navigateDown
+  // move (up / down)
   // ==========================================================================
 
-  test('navigateUp moves through history', () => {
+  test('move(-1) walks backward through history', () => {
     testDb = createTestDb();
     testDb
       .prepare(
@@ -158,23 +153,23 @@ describe('promptHistoryStore', () => {
     const store = usePromptHistoryStore.getState();
     store.initialize();
 
-    // First up: go to newest entry
-    const text1 = store.navigateUp();
+    // First up: go to most recent (newest)
+    const text1 = store.move(-1, '');
     expect(text1).toBe('newest');
-    expect(usePromptHistoryStore.getState().cursor).toBe(0);
+    expect(usePromptHistoryStore.getState().index).toBe(-1);
 
-    // Second up: go to oldest entry
-    const text2 = usePromptHistoryStore.getState().navigateUp();
+    // Second up: go to older entry
+    const text2 = usePromptHistoryStore.getState().move(-1, 'newest');
     expect(text2).toBe('oldest');
-    expect(usePromptHistoryStore.getState().cursor).toBe(1);
+    expect(usePromptHistoryStore.getState().index).toBe(-2);
 
     // Third up: no more entries
-    const text3 = usePromptHistoryStore.getState().navigateUp();
-    expect(text3).toBeNull();
-    expect(usePromptHistoryStore.getState().cursor).toBe(1);
+    const text3 = usePromptHistoryStore.getState().move(-1, 'oldest');
+    expect(text3).toBeUndefined();
+    expect(usePromptHistoryStore.getState().index).toBe(-2);
   });
 
-  test('navigateDown moves back toward draft', () => {
+  test('move(1) walks forward back to current input', () => {
     testDb = createTestDb();
     testDb
       .prepare(
@@ -189,145 +184,70 @@ describe('promptHistoryStore', () => {
 
     const store = usePromptHistoryStore.getState();
     store.initialize();
-    store.setDraft('my draft');
 
     // Navigate up twice
-    store.navigateUp();
-    usePromptHistoryStore.getState().navigateUp();
-    expect(usePromptHistoryStore.getState().cursor).toBe(1);
+    store.move(-1, '');
+    usePromptHistoryStore.getState().move(-1, 'newest');
+    expect(usePromptHistoryStore.getState().index).toBe(-2);
 
     // Navigate down: back to newest
-    const text1 = usePromptHistoryStore.getState().navigateDown();
+    const text1 = usePromptHistoryStore.getState().move(1, 'oldest');
     expect(text1).toBe('newest');
-    expect(usePromptHistoryStore.getState().cursor).toBe(0);
+    expect(usePromptHistoryStore.getState().index).toBe(-1);
 
-    // Navigate down again: back to draft
-    const text2 = usePromptHistoryStore.getState().navigateDown();
-    expect(text2).toBe('my draft');
-    expect(usePromptHistoryStore.getState().cursor).toBe(-1);
+    // Navigate down again: back to current input (empty string)
+    const text2 = usePromptHistoryStore.getState().move(1, 'newest');
+    expect(text2).toBe('');
+    expect(usePromptHistoryStore.getState().index).toBe(0);
 
-    // Navigate down again: already at draft
-    const text3 = usePromptHistoryStore.getState().navigateDown();
-    expect(text3).toBeNull();
-    expect(usePromptHistoryStore.getState().cursor).toBe(-1);
+    // Navigate down again: already at current input
+    const text3 = usePromptHistoryStore.getState().move(1, '');
+    expect(text3).toBeUndefined();
+    expect(usePromptHistoryStore.getState().index).toBe(0);
   });
 
-  test('navigateUp returns null when no history exists', () => {
+  test('move returns undefined when no history exists', () => {
     testDb = createTestDb();
     const store = usePromptHistoryStore.getState();
     store.initialize();
 
-    const text = store.navigateUp();
-    expect(text).toBeNull();
+    const text = store.move(-1, '');
+    expect(text).toBeUndefined();
   });
 
-  test('navigateDown returns null when already at draft', () => {
+  test('move returns undefined when already at current input and going down', () => {
     testDb = createTestDb();
     const store = usePromptHistoryStore.getState();
     store.initialize();
 
-    const text = store.navigateDown();
-    expect(text).toBeNull();
+    const text = store.move(1, '');
+    expect(text).toBeUndefined();
   });
 
-  // ==========================================================================
-  // currentText
-  // ==========================================================================
-
-  test('currentText returns draft when cursor is -1', () => {
-    testDb = createTestDb();
-    const store = usePromptHistoryStore.getState();
-    store.initialize();
-    store.setDraft('my draft');
-
-    expect(usePromptHistoryStore.getState().currentText()).toBe('my draft');
-  });
-
-  test('currentText returns history entry when navigating', () => {
+  test('move blocks navigation when input has been edited', () => {
     testDb = createTestDb();
     testDb
       .prepare(
         'INSERT INTO prompt_history (prompt, created_at) VALUES ($p, $c)',
       )
-      .run({ $p: 'history entry', $c: '2025-01-01T00:00:00Z' });
-
-    const store = usePromptHistoryStore.getState();
-    store.initialize();
-    store.navigateUp();
-
-    expect(usePromptHistoryStore.getState().currentText()).toBe(
-      'history entry',
-    );
-  });
-
-  // ==========================================================================
-  // resetCursor
-  // ==========================================================================
-
-  test('resetCursor moves back to draft without clearing it', () => {
-    testDb = createTestDb();
+      .run({ $p: 'oldest', $c: '2025-01-01T00:00:00Z' });
     testDb
       .prepare(
         'INSERT INTO prompt_history (prompt, created_at) VALUES ($p, $c)',
       )
-      .run({ $p: 'entry', $c: '2025-01-01T00:00:00Z' });
-
-    const store = usePromptHistoryStore.getState();
-    store.initialize();
-    store.setDraft('preserved draft');
-    store.navigateUp();
-
-    expect(usePromptHistoryStore.getState().cursor).toBe(0);
-
-    usePromptHistoryStore.getState().resetCursor();
-
-    const state = usePromptHistoryStore.getState();
-    expect(state.cursor).toBe(-1);
-    expect(state.draft).toBe('preserved draft');
-  });
-
-  // ==========================================================================
-  // Pagination (hasMore)
-  // ==========================================================================
-
-  test('hasMore is true when DB has more entries than loaded', () => {
-    testDb = createTestDb();
-    // Insert more entries than the page size would load in a real scenario
-    // For testing, we rely on the count comparison
-    for (let i = 0; i < 5; i++) {
-      testDb
-        .prepare(
-          'INSERT INTO prompt_history (prompt, created_at) VALUES ($p, $c)',
-        )
-        .run({
-          $p: `prompt ${i}`,
-          $c: `2025-01-01T00:0${i}:00Z`,
-        });
-    }
+      .run({ $p: 'newest', $c: '2025-01-01T00:01:00Z' });
 
     const store = usePromptHistoryStore.getState();
     store.initialize();
 
-    // PAGE_SIZE is 50, so 5 entries should all be loaded
-    const state = usePromptHistoryStore.getState();
-    expect(state.entries).toHaveLength(5);
-    expect(state.hasMore).toBe(false);
-  });
+    // Navigate to most recent entry
+    store.move(-1, '');
+    expect(usePromptHistoryStore.getState().index).toBe(-1);
 
-  // ==========================================================================
-  // Draft persistence across screen switches
-  // ==========================================================================
-
-  test('draft persists across store resets (simulating screen switch)', () => {
-    testDb = createTestDb();
-    const store = usePromptHistoryStore.getState();
-    store.initialize();
-    store.setDraft('work in progress');
-
-    // Simulate unmounting — the store state persists
-    expect(usePromptHistoryStore.getState().draft).toBe('work in progress');
-
-    // Simulate re-mounting — draft is still there
-    expect(usePromptHistoryStore.getState().draft).toBe('work in progress');
+    // Try to navigate further but with modified text — should be blocked
+    const text = usePromptHistoryStore.getState().move(-1, 'newest edited');
+    expect(text).toBeUndefined();
+    // Index should not have changed
+    expect(usePromptHistoryStore.getState().index).toBe(-1);
   });
 });
