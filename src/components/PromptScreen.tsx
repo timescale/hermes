@@ -21,6 +21,7 @@ import type { AgentType } from '../services/config';
 import { log } from '../services/logger';
 import type { OxSession, SandboxProviderType } from '../services/sandbox';
 import type { SlashCommand } from '../services/slashCommands.ts';
+import { usePromptHistoryStore } from '../stores/promptHistoryStore.ts';
 import { useTheme } from '../stores/themeStore.ts';
 import { BackgroundTaskIndicator } from './BackgroundTaskIndicator';
 import { FilterableSelector } from './FilterableSelector';
@@ -139,6 +140,11 @@ export function PromptScreen({
   const model =
     currentModels?.find((m) => m.id === modelId) ??
     (modelId && agent === 'opencode' ? openCodeIdToModel(modelId) : null);
+
+  // Prompt history — initialize store on mount
+  useEffect(() => {
+    usePromptHistoryStore.getState().initialize();
+  }, []);
 
   // Handle agent switch with model matching (disabled when resuming)
   const switchAgent = useCallback(() => {
@@ -596,6 +602,10 @@ export function PromptScreen({
       { agent, model: modelId, mode: submitMode, mountMode, mountDir },
       'Submitting prompt',
     );
+
+    // Record prompt in history (skips empty and consecutive duplicates)
+    usePromptHistoryStore.getState().addEntry(promptText);
+
     onSubmit({
       prompt: promptText,
       agent,
@@ -645,7 +655,7 @@ export function PromptScreen({
     return false;
   };
 
-  // Keyboard handling — only slash command detection remains.
+  // Keyboard handling — slash command detection and prompt history navigation.
   // Action keybinds are handled by the centralized CommandPaletteHost.
   useKeyboard((key) => {
     if (showModelSelector || showThemePicker) return;
@@ -663,6 +673,48 @@ export function PromptScreen({
         }, 0);
       }
       return;
+    }
+
+    // Prompt history navigation with up/down arrows.
+    // Mirrors opencode: up when cursor is at offset 0, down when at end.
+    // When cursor is not yet at the boundary, snap it there so the next
+    // press triggers history navigation.
+    if (key.name === 'up' && !key.ctrl && !key.meta) {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      if (textarea.cursorOffset === 0) {
+        const text = usePromptHistoryStore
+          .getState()
+          .move(-1, textarea.plainText);
+        if (text !== undefined) {
+          textarea.setText(text);
+          textarea.cursorOffset = 0;
+        }
+        return;
+      }
+      // Cursor not at start — if on the first visual row, snap to start
+      if (textarea.visualCursor.visualRow === 0) {
+        textarea.cursorOffset = 0;
+      }
+    }
+
+    if (key.name === 'down' && !key.ctrl && !key.meta) {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      if (textarea.cursorOffset === textarea.plainText.length) {
+        const text = usePromptHistoryStore
+          .getState()
+          .move(1, textarea.plainText);
+        if (text !== undefined) {
+          textarea.setText(text);
+          textarea.cursorOffset = textarea.plainText.length;
+        }
+        return;
+      }
+      // Cursor not at end — if on the last visual row, snap to end
+      if (textarea.visualCursor.visualRow === textarea.virtualLineCount - 1) {
+        textarea.cursorOffset = textarea.plainText.length;
+      }
     }
 
     // Check for "/" key to start slash command
