@@ -1,44 +1,44 @@
 # ox
 
-Run AI coding agents in isolated sandboxes, one task at a time.
+Exécutez des agents de codage IA dans des bacs à sable isolés, une tâche à la fois.
 
-Ox automates the entire workflow of starting a coding task: it creates a feature branch, optionally forks your database, and launches an AI agent inside an isolated sandbox -- all from a single command or an interactive terminal UI.
+Ox automatise l'intégralité du flux de travail de démarrage d'une tâche de codage : il crée une branche de fonctionnalité, forke optionnellement votre base de données et lance un agent IA dans un bac à sable isolé - le tout à partir d'une seule commande ou d'une interface utilisateur de terminal interactive.
 
-### Features
+### Fonctionnalités
 
-- **Sandboxed execution** -- Agents run in isolated Docker containers or cloud sandboxes, never on your host machine
-- **Branch-per-task** -- Automatically creates a git branch with an LLM-generated name for each task
-- **Database forking** -- Optionally fork your Timescale database per branch for full environment isolation
-- **Multiple agents** -- Supports Claude Code and OpenCode out of the box
-- **Interactive TUI** -- Rich terminal UI for managing sessions, with a command palette, 30+ themes, and keyboard shortcuts
-- **Session management** -- Start, stop, resume, attach to, and shell into agent sessions at any time
-- **Two sandbox providers** -- Run locally with Docker or remotely with cloud sandboxes
-- **Auto-update** -- Keeps itself up to date in the background
+- **Exécution en bac à sable** -- Les agents s'exécutent dans des conteneurs Docker isolés ou des bacs à sable cloud, jamais sur votre machine hôte
+- **Branche par tâche** -- Crée automatiquement une branche git avec un nom généré par LLM pour chaque tâche
+- **Forking de base de données** -- Forke optionnellement votre base de données Timescale par branche pour une isolation complète de l'environnement
+- **Agents multiples** -- Supporte Claude Code et OpenCode prêts à l'emploi
+- **Interface utilisateur interactive** -- Interface utilisateur de terminal riche pour gérer les sessions, avec une palette de commandes, 30+ thèmes et raccourcis clavier
+- **Gestion des sessions** -- Démarrez, arrêtez, reprenez, attachez-vous et ouvrez un shell dans les sessions d'agent à tout moment
+- **Deux fournisseurs de bac à sable** -- Exécutez localement avec Docker ou à distance avec des bacs à sable cloud
+- **Mise à jour automatique** -- Se met à jour lui-même en arrière-plan
 
-## Quick Start
+## Démarrage rapide
 
 ```bash
-# Install
+# Installer
 curl -fsSL https://get.ox.build | bash
 
-# Run the interactive TUI
+# Exécuter l'interface utilisateur interactive
 ox
 
-# Or start a task directly
+# Ou démarrer une tâche directement
 ox "Add input validation to the signup form"
 ```
 
 ## Installation
 
-### Quick Install (Recommended)
+### Installation rapide (Recommandée)
 
 ```bash
 curl -fsSL https://get.ox.build | bash
 ```
 
-After installation, restart your shell or run `source ~/.zshrc` (or `source ~/.bashrc`) to update your PATH.
+Après l'installation, redémarrez votre shell ou exécutez `source ~/.zshrc` (ou `source ~/.bashrc`) pour mettre à jour votre PATH.
 
-Re-run the command at any time to update to the latest version.
+Réexécutez la commande à tout moment pour mettre à jour vers la dernière version.
 
 ### Homebrew
 
@@ -52,236 +52,236 @@ brew install timescale/tap/ox
 npm i -g @ox.build/cli
 ```
 
-### Source (Developers)
+### Source (Développeurs)
 
 ```bash
 git clone https://github.com/timescale/ox.git
 cd ox
 ./bun i && ./bun link
-source ~/.zshrc  # or restart your shell
+source ~/.zshrc  # ou redémarrez votre shell
 ```
 
-### Recommended Terminal
+### Terminal recommandé
 
-While any terminal should work, we recommend [Ghostty](https://ghostty.org/) for the best TUI experience:
+Bien que n'importe quel terminal devrait fonctionner, nous recommandons [Ghostty](https://ghostty.org/) pour la meilleure expérience TUI :
 
 ```bash
 brew install --cask ghostty
 ```
 
-## Usage
+## Utilisation
 
-### Interactive TUI
+### Interface utilisateur interactive
 
-Run `ox` with no arguments to open the full terminal UI. From here you can write a prompt to start a new task, browse active sessions, resume previous work, and manage configuration.
+Exécutez `ox` sans arguments pour ouvrir l'interface utilisateur de terminal complète. De là, vous pouvez écrire une invite pour démarrer une nouvelle tâche, parcourir les sessions actives, reprendre le travail précédent et gérer la configuration.
 
 ```bash
 ox
 ```
 
-### Single Task
+### Tâche unique
 
-Pass a natural-language description to start a task directly:
+Passez une description en langage naturel pour démarrer une tâche directement :
 
 ```bash
 ox "Refactor the auth middleware to use JWT tokens"
 ```
 
-Ox will create a branch, set up a sandbox, and launch the configured agent with your prompt. The agent runs in the background -- use `ox sessions` to check on it, or `ox` to open the TUI and attach.
+Ox créera une branche, configurera un bac à sable et lancera l'agent configuré avec votre invite. L'agent s'exécute en arrière-plan -- utilisez `ox sessions` pour le vérifier, ou `ox` pour ouvrir l'interface utilisateur et vous attacher.
 
-### Interactive Mode
+### Mode interactif
 
-To work alongside the agent in a live terminal session:
+Pour travailler aux côtés de l'agent dans une session de terminal en direct :
 
 ```bash
 ox -i "Fix the failing integration tests"
 ```
 
-### Shell Access
+### Accès au shell
 
-Open a bash shell inside a new sandbox without starting an agent:
+Ouvrez un shell bash dans un nouveau bac à sable sans démarrer un agent :
 
 ```bash
 ox shell
 ```
 
-Or shell into a running session:
+Ou ouvrez un shell dans une session en cours d'exécution :
 
 ```bash
 ox resume --shell <session>
 ```
 
-## Sandbox Providers
+## Fournisseurs de bac à sable
 
-Ox supports two sandbox providers for running agents:
+Ox prend en charge deux fournisseurs de bac à sable pour exécuter les agents :
 
-### Docker (Default)
+### Docker (Par défaut)
 
-Agents run in local Docker containers built from purpose-built images that include common development tools, language runtimes, and the AI agent CLIs. Your code is either cloned from GitHub or bind-mounted from your local filesystem.
+Les agents s'exécutent dans des conteneurs Docker locaux construits à partir d'images spécialement conçues qui incluent des outils de développement courants, des runtimes de langage et les CLI de l'agent IA. Votre code est soit cloné depuis GitHub, soit lié à partir de votre système de fichiers local.
 
 ```bash
-# Mount your local working directory into the sandbox
+# Monter votre répertoire de travail local dans le bac à sable
 ox --mount "Add tests for the new API endpoints"
 ```
 
 ### Cloud
 
-Agents run in remote cloud sandboxes powered by Deno Deploy. This is useful for offloading work from your machine or running tasks in parallel without local resource constraints.
+Les agents s'exécutent dans des bacs à sable cloud distants alimentés par Deno Deploy. Ceci est utile pour décharger le travail de votre machine ou exécuter des tâches en parallèle sans contraintes de ressources locales.
 
 ```bash
-# Use the cloud provider
+# Utiliser le fournisseur cloud
 ox --provider cloud "Migrate the database schema"
 ```
 
-Configure the default provider in your config:
+Configurez le fournisseur par défaut dans votre config :
 
 ```yaml
 # .ox/config.yml
 sandboxProvider: cloud
-cloudRegion: ord  # ord (Chicago) or ams (Amsterdam)
+cloudRegion: ord  # ord (Chicago) ou ams (Amsterdam)
 ```
 
-## Agent Support
+## Support des agents
 
-Ox ships with support for two AI coding agents:
+Ox est livré avec le support de deux agents de codage IA :
 
 | Agent | Description |
 |-------|-------------|
-| **OpenCode** | Open-source coding agent CLI with support for multiple model providers |
-| **Claude Code** | Anthropic's Claude Code CLI |
+| **OpenCode** | CLI d'agent de codage open-source avec support pour plusieurs fournisseurs de modèles |
+| **Claude Code** | CLI Claude Code d'Anthropic |
 
-Select an agent per-task or set a default:
+Sélectionnez un agent par tâche ou définissez une valeur par défaut :
 
 ```bash
-# Use a specific agent for this task
+# Utiliser un agent spécifique pour cette tâche
 ox --agent claude "Implement the new dashboard component"
 
-# Set a default in config
+# Définir une valeur par défaut dans la config
 ox config
 ```
 
-You can also choose a specific model:
+Vous pouvez également choisir un modèle spécifique :
 
 ```bash
 ox --model opus "Design the database schema for the new feature"
 ```
 
-## Database Forking
+## Forking de base de données
 
-When working with a [Timescale](https://www.timescale.com/) database, Ox can automatically create an isolated database fork for each task branch. This gives each agent session its own copy of the database to work with, so schema changes and test data never collide between tasks.
+Lorsque vous travaillez avec une base de données [Timescale](https://www.timescale.com/), Ox peut créer automatiquement un fork de base de données isolé pour chaque branche de tâche. Cela donne à chaque session d'agent sa propre copie de la base de données avec laquelle travailler, de sorte que les modifications de schéma et les données de test ne se heurtent jamais entre les tâches.
 
-Database forking is optional. If no Timescale service is configured, Ox skips this step and creates the sandbox without a database fork.
+Le forking de base de données est optionnel. Si aucun service Timescale n'est configuré, Ox ignore cette étape et crée le bac à sable sans fork de base de données.
 
 ```yaml
 # .ox/config.yml
-tigerServiceId: your-service-id  # or null to disable
+tigerServiceId: your-service-id  # ou null pour désactiver
 ```
 
 ## Configuration
 
-Ox uses a two-level YAML configuration system:
+Ox utilise un système de configuration YAML à deux niveaux :
 
-| Level | Location | Purpose |
-|-------|----------|---------|
-| **User** | `~/.config/ox/config.yml` | Personal defaults across all projects |
-| **Project** | `.ox/config.yml` | Project-specific overrides (gitignored) |
+| Niveau | Emplacement | Objectif |
+|--------|-------------|----------|
+| **Utilisateur** | `~/.config/ox/config.yml` | Valeurs par défaut personnelles pour tous les projets |
+| **Projet** | `.ox/config.yml` | Remplacements spécifiques au projet (gitignored) |
 
-Project config takes precedence over user config.
+La configuration du projet prend précédence sur la configuration de l'utilisateur.
 
-### Interactive Setup
+### Configuration interactive
 
-Run `ox config` to walk through an interactive setup wizard that configures your sandbox provider, agent, model, and authentication.
+Exécutez `ox config` pour parcourir un assistant de configuration interactive qui configure votre fournisseur de bac à sable, agent, modèle et authentification.
 
-### Key Options
+### Options clés
 
 ```yaml
 # .ox/config.yml
-agent: opencode             # Default agent: opencode or claude
-model: sonnet               # Default model for the selected agent
-sandboxProvider: docker      # Sandbox provider: docker or cloud
-cloudRegion: ord             # Cloud region: ord (Chicago) or ams (Amsterdam)
-tigerServiceId: null         # Timescale service ID for DB forking (null to disable)
-overlayMounts:               # Paths to isolate in mount mode (e.g., node_modules)
+agent: opencode             # Agent par défaut : opencode ou claude
+model: sonnet               # Modèle par défaut pour l'agent sélectionné
+sandboxProvider: docker      # Fournisseur de bac à sable : docker ou cloud
+cloudRegion: ord             # Région cloud : ord (Chicago) ou ams (Amsterdam)
+tigerServiceId: null         # ID de service Timescale pour DB forking (null pour désactiver)
+overlayMounts:               # Chemins à isoler en mode montage (par ex., node_modules)
   - node_modules
-initScript: 'npm install'   # Shell command to run before starting the agent
-themeName: opencode          # TUI theme (30+ built-in themes)
+initScript: 'npm install'   # Commande shell à exécuter avant de démarrer l'agent
+themeName: opencode          # Thème TUI (30+ thèmes intégrés)
 ```
 
-### Environment Variables
+### Variables d'environnement
 
-Place a `.ox/.env` file in your project root to pass environment variables into the sandbox:
+Placez un fichier `.ox/.env` dans la racine de votre projet pour transmettre des variables d'environnement dans le bac à sable :
 
 ```env
 DATABASE_URL=postgres://localhost:5432/mydb
 API_KEY=your-key-here
 ```
 
-## Session Management
+## Gestion des sessions
 
-### Listing Sessions
+### Énumération des sessions
 
 ```bash
-# Open the TUI session list
+# Ouvrir la liste des sessions TUI
 ox sessions
 
-# Table output
+# Sortie du tableau
 ox sessions --output table
 
-# JSON output for scripting
+# Sortie JSON pour les scripts
 ox sessions --output json
 
-# Include stopped sessions
+# Inclure les sessions arrêtées
 ox sessions --all
 ```
 
-### Resuming Sessions
+### Reprise des sessions
 
 ```bash
-# Resume a stopped session
+# Reprendre une session arrêtée
 ox resume <session>
 
-# Resume with a new prompt
+# Reprendre avec une nouvelle invite
 ox resume <session> "Continue by adding error handling"
 
-# Resume in the background
+# Reprendre en arrière-plan
 ox resume --detach <session>
 ```
 
-### Cleanup
+### Nettoyage
 
 ```bash
-# Remove stopped containers
+# Supprimer les conteneurs arrêtés
 ox sessions clean
 
-# Remove all containers (including running)
+# Supprimer tous les conteneurs (y compris en cours d'exécution)
 ox sessions clean --all
 
-# Clean up old images, volumes, and snapshots
+# Nettoyer les anciennes images, volumes et snapshots
 ox resources clean
 ```
 
-## CLI Reference
+## Référence CLI
 
-| Command | Description |
-|---------|-------------|
-| `ox [prompt]` | Start a new task or open the TUI |
-| `ox sessions` | List and manage sessions |
-| `ox resume <session>` | Resume a stopped session |
-| `ox shell` | Open a shell in a new sandbox |
-| `ox config` | Interactive configuration wizard |
-| `ox auth check <provider>` | Check authentication status |
-| `ox auth login <provider>` | Log in to a provider |
-| `ox resources` | Manage sandbox images, volumes, and snapshots |
-| `ox logs` | View ox logs |
-| `ox upgrade` | Check for and install updates |
-| `ox completions [shell]` | Set up shell tab completions |
-| `ox claude [args...]` | Run Claude Code inside a sandbox |
-| `ox opencode [args...]` | Run OpenCode inside a sandbox |
-| `ox gh [args...]` | Run the GitHub CLI inside a sandbox |
-| `ox colors` | Display theme color swatches |
+| Commande | Description |
+|----------|-------------|
+| `ox [prompt]` | Démarrer une nouvelle tâche ou ouvrir l'interface utilisateur |
+| `ox sessions` | Énumérer et gérer les sessions |
+| `ox resume <session>` | Reprendre une session arrêtée |
+| `ox shell` | Ouvrir un shell dans un nouveau bac à sable |
+| `ox config` | Assistant de configuration interactive |
+| `ox auth check <provider>` | Vérifier l'état de l'authentification |
+| `ox auth login <provider>` | Se connecter à un fournisseur |
+| `ox resources` | Gérer les images de bac à sable, les volumes et les snapshots |
+| `ox logs` | Afficher les journaux ox |
+| `ox upgrade` | Vérifier et installer les mises à jour |
+| `ox completions [shell]` | Configurer les complétions d'onglet shell |
+| `ox claude [args...]` | Exécuter Claude Code dans un bac à sable |
+| `ox opencode [args...]` | Exécuter OpenCode dans un bac à sable |
+| `ox gh [args...]` | Exécuter la CLI GitHub dans un bac à sable |
+| `ox colors` | Afficher les échantillons de couleur du thème |
 
-Use `ox <command> --help` for detailed options on any command.
+Utilisez `ox <command> --help` pour des options détaillées sur n'importe quelle commande.
 
-## License
+## Licence
 
-Apache 2.0 -- see [LICENSE](LICENSE) for details.
+Apache 2.0 -- voir [LICENSE](LICENSE) pour les détails.
