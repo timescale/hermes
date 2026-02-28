@@ -187,6 +187,15 @@ async function handleCrash(source: string, err: unknown): Promise<void> {
   if (crashHandlerFired) return;
   crashHandlerFired = true;
 
+  // Print the error to stderr so the user sees what happened.
+  // Registering an uncaughtException handler suppresses the default output,
+  // so we need to restore it explicitly.
+  const label =
+    source === 'uncaughtException'
+      ? 'Uncaught exception'
+      : 'Unhandled promise rejection';
+  console.error(`${label}:`, err);
+
   const errorType =
     err instanceof Error ? err.name || err.constructor.name : typeof err;
 
