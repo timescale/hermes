@@ -677,6 +677,8 @@ export function PromptScreen({
 
     // Prompt history navigation with up/down arrows.
     // Mirrors opencode: up when cursor is at offset 0, down when at end.
+    // When cursor is not yet at the boundary, snap it there so the next
+    // press triggers history navigation.
     if (key.name === 'up' && !key.ctrl && !key.meta) {
       const textarea = textareaRef.current;
       if (!textarea) return;
@@ -689,6 +691,10 @@ export function PromptScreen({
           textarea.cursorOffset = 0;
         }
         return;
+      }
+      // Cursor not at start — if on the first visual row, snap to start
+      if (textarea.visualCursor.visualRow === 0) {
+        textarea.cursorOffset = 0;
       }
     }
 
@@ -704,6 +710,10 @@ export function PromptScreen({
           textarea.cursorOffset = textarea.plainText.length;
         }
         return;
+      }
+      // Cursor not at end — if on the last visual row, snap to end
+      if (textarea.visualCursor.visualRow === textarea.virtualLineCount - 1) {
+        textarea.cursorOffset = textarea.plainText.length;
       }
     }
 
